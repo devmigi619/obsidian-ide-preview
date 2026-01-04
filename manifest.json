@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-ide-preview",
+	"name": "IDE Style Preview",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Opens files in a preview tab (italic title) unless double-clicked or edited, similar to VS Code.",
+	"author": "Gemini",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

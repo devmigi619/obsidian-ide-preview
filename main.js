@@ -41,7 +41,6 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     this.previewLeaf = null;
   }
   async onload() {
-    console.log("Smart Tabs Plugin loaded");
     await this.loadSettings();
     this.addSettingTab(new PreviewModeSettingTab(this.app, this));
     this.handleClick = this.handleClick.bind(this);
@@ -79,7 +78,6 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
-  // --- 이벤트 핸들러 ---
   handleClick(evt) {
     const target = evt.target;
     const titleEl = target.closest(".nav-file-title");
@@ -124,7 +122,6 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       this.markAsPermanent(this.previewLeaf);
     }
   }
-  // --- 핵심 로직 ---
   async openFileLogic(file, isDoubleClick) {
     if (this.settings.jumpToDuplicate) {
       let existingLeaf = null;
@@ -199,20 +196,19 @@ var PreviewModeSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Smart Tabs Settings" });
-    new import_obsidian.Setting(containerEl).setName("Italic Title for Preview").setDesc("Display the preview tab title in italics.").addToggle((toggle) => toggle.setValue(this.plugin.settings.useItalicTitle).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Italic title for preview").setDesc("Display the preview tab title in italics.").addToggle((toggle) => toggle.setValue(this.plugin.settings.useItalicTitle).onChange(async (value) => {
       this.plugin.settings.useItalicTitle = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Reuse Empty Tab (Locality)").setDesc("If the current tab is empty, open the file in it instead of creating a new one.").addToggle((toggle) => toggle.setValue(this.plugin.settings.reuseEmptyTab).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Reuse empty tab (Locality)").setDesc("If the current tab is empty, open the file in it instead of creating a new one.").addToggle((toggle) => toggle.setValue(this.plugin.settings.reuseEmptyTab).onChange(async (value) => {
       this.plugin.settings.reuseEmptyTab = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Promote Old Preview").setDesc("If a new preview is opened elsewhere, keep the old preview tab as a regular tab instead of closing it.").addToggle((toggle) => toggle.setValue(this.plugin.settings.promoteOldPreview).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Promote old preview").setDesc("If a new preview is opened elsewhere, keep the old preview tab as a regular tab instead of closing it.").addToggle((toggle) => toggle.setValue(this.plugin.settings.promoteOldPreview).onChange(async (value) => {
       this.plugin.settings.promoteOldPreview = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Focus Existing Tab").setDesc("If the file is already open, jump to that tab instead of opening it again.").addToggle((toggle) => toggle.setValue(this.plugin.settings.jumpToDuplicate).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Focus existing tab").setDesc("If the file is already open, jump to that tab instead of opening it again.").addToggle((toggle) => toggle.setValue(this.plugin.settings.jumpToDuplicate).onChange(async (value) => {
       this.plugin.settings.jumpToDuplicate = value;
       await this.plugin.saveSettings();
     }));

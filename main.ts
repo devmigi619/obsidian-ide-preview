@@ -24,10 +24,8 @@ export default class PreviewModePlugin extends Plugin {
         await this.loadSettings();
         this.addSettingTab(new PreviewModeSettingTab(this.app, this));
 
-        this.handleClick = this.handleClick.bind(this);
-        this.handleDblClick = this.handleDblClick.bind(this);
-        this.handleHeaderDblClick = this.handleHeaderDblClick.bind(this);
-
+        // [수정 1] 화살표 함수 사용으로 인해 .bind() 제거됨 (봇 지적 해결)
+        
         document.addEventListener('click', this.handleClick, true);
         document.addEventListener('dblclick', this.handleDblClick, true);
         document.addEventListener('dblclick', this.handleHeaderDblClick, true);
@@ -68,7 +66,8 @@ export default class PreviewModePlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    handleClick(evt: MouseEvent) {
+    // [수정 2] 화살표 함수로 변경하여 'this' 스코프 문제 해결
+    handleClick = (evt: MouseEvent) => {
         const target = evt.target as HTMLElement;
         const titleEl = target.closest('.nav-file-title');
         if (!titleEl) return;
@@ -84,10 +83,12 @@ export default class PreviewModePlugin extends Plugin {
         evt.stopPropagation();
         evt.stopImmediatePropagation();
 
-        this.openFileLogic(file, false);
+        // [수정 3] void 연산자로 Promise 처리 명시 (봇 지적 해결)
+        void this.openFileLogic(file, false);
     }
 
-    handleDblClick(evt: MouseEvent) {
+    // [수정 2] 화살표 함수로 변경
+    handleDblClick = (evt: MouseEvent) => {
         const target = evt.target as HTMLElement;
         const titleEl = target.closest('.nav-file-title');
         if (!titleEl) return;
@@ -102,13 +103,17 @@ export default class PreviewModePlugin extends Plugin {
         evt.stopPropagation();
         evt.stopImmediatePropagation();
 
-        this.openFileLogic(file, true);
+        // [수정 3] void 연산자 추가
+        void this.openFileLogic(file, true);
     }
 
-    handleHeaderDblClick(evt: MouseEvent) {
+    // [수정 2] 화살표 함수로 변경
+    handleHeaderDblClick = (evt: MouseEvent) => {
         const target = evt.target as HTMLElement;
         const tabHeader = target.closest('.workspace-tab-header');
-        if (tabHeader && this.previewLeaf && this.previewLeaf.tabHeaderEl === tabHeader) {
+        
+        // (this.previewLeaf as any) 타입 단언 유지 (VSCode 오류 방지)
+        if (tabHeader && this.previewLeaf && (this.previewLeaf as any).tabHeaderEl === tabHeader) {
             evt.preventDefault();
             evt.stopPropagation();
             evt.stopImmediatePropagation();
@@ -172,15 +177,16 @@ export default class PreviewModePlugin extends Plugin {
                 }
             }
 
-            await targetLeaf!.openFile(file);
-            this.markAsPreview(targetLeaf!);
+            // [수정 4] 불필요한 ! 단언 제거 (봇 지적 해결)
+            await targetLeaf.openFile(file);
+            this.markAsPreview(targetLeaf);
         }
     }
 
     markAsPreview(leaf: WorkspaceLeaf) {
         this.previewLeaf = leaf;
-        if (this.settings.useItalicTitle && leaf.tabHeaderEl) {
-            leaf.tabHeaderEl.classList.add(PREVIEW_CLASS);
+        if (this.settings.useItalicTitle && (leaf as any).tabHeaderEl) {
+            (leaf as any).tabHeaderEl.classList.add(PREVIEW_CLASS);
         }
     }
 
@@ -188,8 +194,8 @@ export default class PreviewModePlugin extends Plugin {
         if (this.previewLeaf === leaf) {
             this.previewLeaf = null;
         }
-        if (leaf.tabHeaderEl) {
-            leaf.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+        if ((leaf as any).tabHeaderEl) {
+            (leaf as any).tabHeaderEl.classList.remove(PREVIEW_CLASS);
         }
     }
 }
@@ -217,7 +223,8 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Reuse empty tab (Locality)')
+            // [수정 5] Locality -> locality (소문자 적용)
+            .setName('Reuse empty tab (locality)')
             .setDesc('If the current tab is empty, open the file in it instead of creating a new one.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.reuseEmptyTab)

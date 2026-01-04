@@ -5,6 +5,6 @@
 	"minAppVersion": "0.15.0",
 	"description": "Replicates VS Code tab behavior: Preview tabs (italic), auto-locking on edit, and smart tab reuse to prevent tab clutter.",
 	"author": "Migi",
-	"authorUrl": "https://github.com/devmigi",
+	"authorUrl": "https://github.com/devmigi619",
 	"isDesktopOnly": false
 }

@@ -32,9 +32,7 @@ var DEFAULT_SETTINGS = {
   useItalicTitle: true,
   reuseEmptyTab: true,
   promoteOldPreview: true,
-  // v5 로직 (승격)
   jumpToDuplicate: true
-  // v6 로직 (중복 체크)
 };
 var PREVIEW_CLASS = "is-preview-tab";
 var PreviewModePlugin = class extends import_obsidian.Plugin {
@@ -43,7 +41,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     this.previewLeaf = null;
   }
   async onload() {
-    console.log("Preview Mode Plugin loaded (TS + Settings)");
+    console.log("Smart Tabs Plugin loaded");
     await this.loadSettings();
     this.addSettingTab(new PreviewModeSettingTab(this.app, this));
     this.handleClick = this.handleClick.bind(this);
@@ -75,11 +73,9 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       el.classList.remove(PREVIEW_CLASS);
     });
   }
-  // 설정 불러오기
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
-  // 설정 저장하기
   async saveSettings() {
     await this.saveData(this.settings);
   }
@@ -87,12 +83,16 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   handleClick(evt) {
     const target = evt.target;
     const titleEl = target.closest(".nav-file-title");
-    if (!titleEl) return;
-    if (evt.ctrlKey || evt.metaKey || evt.shiftKey) return;
+    if (!titleEl)
+      return;
+    if (evt.ctrlKey || evt.metaKey || evt.shiftKey)
+      return;
     const path = titleEl.getAttribute("data-path");
-    if (!path) return;
+    if (!path)
+      return;
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian.TFile)) return;
+    if (!(file instanceof import_obsidian.TFile))
+      return;
     evt.preventDefault();
     evt.stopPropagation();
     evt.stopImmediatePropagation();
@@ -101,11 +101,14 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   handleDblClick(evt) {
     const target = evt.target;
     const titleEl = target.closest(".nav-file-title");
-    if (!titleEl) return;
+    if (!titleEl)
+      return;
     const path = titleEl.getAttribute("data-path");
-    if (!path) return;
+    if (!path)
+      return;
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian.TFile)) return;
+    if (!(file instanceof import_obsidian.TFile))
+      return;
     evt.preventDefault();
     evt.stopPropagation();
     evt.stopImmediatePropagation();
@@ -121,7 +124,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       this.markAsPermanent(this.previewLeaf);
     }
   }
-  // --- 핵심 로직 (옵션 반영) ---
+  // --- 핵심 로직 ---
   async openFileLogic(file, isDoubleClick) {
     if (this.settings.jumpToDuplicate) {
       let existingLeaf = null;
@@ -132,7 +135,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       });
       if (existingLeaf) {
         this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
-        if (isDoubleClick) this.markAsPermanent(existingLeaf);
+        if (isDoubleClick)
+          this.markAsPermanent(existingLeaf);
         return;
       }
     }
@@ -195,7 +199,7 @@ var PreviewModeSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "IDE Style Preview Settings" });
+    containerEl.createEl("h2", { text: "Smart Tabs Settings" });
     new import_obsidian.Setting(containerEl).setName("Italic Title for Preview").setDesc("Display the preview tab title in italics.").addToggle((toggle) => toggle.setValue(this.plugin.settings.useItalicTitle).onChange(async (value) => {
       this.plugin.settings.useItalicTitle = value;
       await this.plugin.saveSettings();

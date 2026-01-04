@@ -8,12 +8,12 @@ interface PreviewModeSettings {
     jumpToDuplicate: boolean;     // 중복 탭 포커스 이동 여부
 }
 
-// 기본값 설정 (우리가 합의한 최적의 값)
+// 기본값 설정
 const DEFAULT_SETTINGS: PreviewModeSettings = {
     useItalicTitle: true,
     reuseEmptyTab: true,
-    promoteOldPreview: true, // v5 로직 (승격)
-    jumpToDuplicate: true    // v6 로직 (중복 체크)
+    promoteOldPreview: true,
+    jumpToDuplicate: true
 }
 
 const PREVIEW_CLASS = 'is-preview-tab';
@@ -23,7 +23,7 @@ export default class PreviewModePlugin extends Plugin {
     previewLeaf: WorkspaceLeaf | null = null;
 
     async onload() {
-        console.log('Preview Mode Plugin loaded (TS + Settings)');
+        console.log('Smart Tabs Plugin loaded');
 
         // 설정 불러오기
         await this.loadSettings();
@@ -52,7 +52,7 @@ export default class PreviewModePlugin extends Plugin {
         // 탭 닫힘 감지
         this.registerEvent(this.app.workspace.on('layout-change', () => {
             if (this.previewLeaf) {
-                // @ts-ignore (Obsidian API 타입 이슈 회피)
+                // @ts-ignore
                 const exists = this.app.workspace.getLeafById(this.previewLeaf.id);
                 if (!exists) {
                     this.previewLeaf = null;
@@ -71,12 +71,10 @@ export default class PreviewModePlugin extends Plugin {
         });
     }
 
-    // 설정 불러오기
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
 
-    // 설정 저장하기
     async saveSettings() {
         await this.saveData(this.settings);
     }
@@ -92,7 +90,7 @@ export default class PreviewModePlugin extends Plugin {
         if (!path) return;
         const file = this.app.vault.getAbstractFileByPath(path);
         
-        if (!(file instanceof TFile)) return; // 파일만 처리
+        if (!(file instanceof TFile)) return;
 
         evt.preventDefault();
         evt.stopPropagation();
@@ -130,7 +128,7 @@ export default class PreviewModePlugin extends Plugin {
         }
     }
 
-    // --- 핵심 로직 (옵션 반영) ---
+    // --- 핵심 로직 ---
     async openFileLogic(file: TFile, isDoubleClick: boolean) {
         
         // [옵션: 중복 탭 포커스 이동]
@@ -176,9 +174,9 @@ export default class PreviewModePlugin extends Plugin {
                 // [옵션: 기존 미리보기 처리]
                 if (isOldPreviewValid && oldPreview !== targetLeaf) {
                     if (this.settings.promoteOldPreview) {
-                        this.markAsPermanent(oldPreview); // 승격 (v5)
+                        this.markAsPermanent(oldPreview); // 승격
                     } else {
-                        oldPreview.detach(); // 닫기 (v4)
+                        oldPreview.detach(); // 닫기
                     }
                 }
             } 
@@ -201,7 +199,6 @@ export default class PreviewModePlugin extends Plugin {
 
     markAsPreview(leaf: WorkspaceLeaf) {
         this.previewLeaf = leaf;
-        // [옵션: 이탤릭체 사용]
         if (this.settings.useItalicTitle && leaf.tabHeaderEl) {
             leaf.tabHeaderEl.classList.add(PREVIEW_CLASS);
         }
@@ -230,7 +227,8 @@ class PreviewModeSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl('h2', { text: 'IDE Style Preview Settings' });
+        // 제목 수정됨: Smart Tabs Settings
+        containerEl.createEl('h2', { text: 'Smart Tabs Settings' });
 
         new Setting(containerEl)
             .setName('Italic Title for Preview')

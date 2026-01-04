@@ -1,11 +1,11 @@
-import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, TFile, View } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, TFile } from 'obsidian';
 
 // 설정(옵션) 데이터 구조 정의
 interface PreviewModeSettings {
-    useItalicTitle: boolean;      // 제목 이탤릭체 사용 여부
-    reuseEmptyTab: boolean;       // 현재 보고 있는 빈 탭 재활용 여부 (Locality)
-    promoteOldPreview: boolean;   // 기존 미리보기 탭 처리 (True: 승격, False: 닫기)
-    jumpToDuplicate: boolean;     // 중복 탭 포커스 이동 여부
+    useItalicTitle: boolean;
+    reuseEmptyTab: boolean;
+    promoteOldPreview: boolean;
+    jumpToDuplicate: boolean;
 }
 
 // 기본값 설정
@@ -23,25 +23,20 @@ export default class PreviewModePlugin extends Plugin {
     previewLeaf: WorkspaceLeaf | null = null;
 
     async onload() {
-        console.log('Smart Tabs Plugin loaded');
+        // [수정 3] 불필요한 콘솔 로그 제거 (가이드라인 준수)
+        // console.log('Smart Tabs Plugin loaded'); 
 
-        // 설정 불러오기
         await this.loadSettings();
-
-        // 설정 탭 추가
         this.addSettingTab(new PreviewModeSettingTab(this.app, this));
 
-        // 이벤트 바인딩
         this.handleClick = this.handleClick.bind(this);
         this.handleDblClick = this.handleDblClick.bind(this);
         this.handleHeaderDblClick = this.handleHeaderDblClick.bind(this);
 
-        // DOM 이벤트 리스너 (Capture Mode)
         document.addEventListener('click', this.handleClick, true);
         document.addEventListener('dblclick', this.handleDblClick, true);
         document.addEventListener('dblclick', this.handleHeaderDblClick, true);
 
-        // 에디터 변경 감지 -> 보존 처리
         this.registerEvent(this.app.workspace.on('editor-change', (editor, info) => {
             const activeLeaf = this.app.workspace.getLeaf(false);
             if (this.previewLeaf === activeLeaf) {
@@ -49,7 +44,6 @@ export default class PreviewModePlugin extends Plugin {
             }
         }));
 
-        // 탭 닫힘 감지
         this.registerEvent(this.app.workspace.on('layout-change', () => {
             if (this.previewLeaf) {
                 // @ts-ignore
@@ -79,7 +73,6 @@ export default class PreviewModePlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    // --- 이벤트 핸들러 ---
     handleClick(evt: MouseEvent) {
         const target = evt.target as HTMLElement;
         const titleEl = target.closest('.nav-file-title');
@@ -128,10 +121,7 @@ export default class PreviewModePlugin extends Plugin {
         }
     }
 
-    // --- 핵심 로직 ---
     async openFileLogic(file: TFile, isDoubleClick: boolean) {
-        
-        // [옵션: 중복 탭 포커스 이동]
         if (this.settings.jumpToDuplicate) {
             let existingLeaf: WorkspaceLeaf | null = null;
             this.app.workspace.iterateAllLeaves(leaf => {
@@ -149,7 +139,6 @@ export default class PreviewModePlugin extends Plugin {
         }
 
         if (isDoubleClick) {
-            // 더블 클릭
             // @ts-ignore
             if (this.previewLeaf && this.previewLeaf.view.file && this.previewLeaf.view.file.path === file.path) {
                 this.markAsPermanent(this.previewLeaf);
@@ -159,7 +148,6 @@ export default class PreviewModePlugin extends Plugin {
                 this.markAsPermanent(leaf);
             }
         } else {
-            // 싱글 클릭 (미리보기)
             const activeLeaf = this.app.workspace.getLeaf(false);
             const oldPreview = this.previewLeaf;
             let targetLeaf: WorkspaceLeaf | null = null;
@@ -167,16 +155,13 @@ export default class PreviewModePlugin extends Plugin {
             // @ts-ignore
             const isOldPreviewValid = oldPreview && this.app.workspace.getLeafById(oldPreview.id);
 
-            // [옵션: 빈 탭 재활용]
             if (this.settings.reuseEmptyTab && activeLeaf.view.getViewType() === 'empty') {
                 targetLeaf = activeLeaf;
-
-                // [옵션: 기존 미리보기 처리]
                 if (isOldPreviewValid && oldPreview !== targetLeaf) {
                     if (this.settings.promoteOldPreview) {
-                        this.markAsPermanent(oldPreview); // 승격
+                        this.markAsPermanent(oldPreview);
                     } else {
-                        oldPreview.detach(); // 닫기
+                        oldPreview.detach();
                     }
                 }
             } 
@@ -214,7 +199,6 @@ export default class PreviewModePlugin extends Plugin {
     }
 }
 
-// 설정 UI 클래스
 class PreviewModeSettingTab extends PluginSettingTab {
     plugin: PreviewModePlugin;
 
@@ -227,11 +211,12 @@ class PreviewModeSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        // 제목 수정됨: Smart Tabs Settings
-        containerEl.createEl('h2', { text: 'Smart Tabs Settings' });
+        // [수정 1] 불필요한 h2 제목 제거 (가이드라인 준수)
+        // containerEl.createEl('h2', { text: 'Smart Tabs Settings' });
 
+        // [수정 2] UI 텍스트 Sentence case 적용 (가이드라인 준수)
         new Setting(containerEl)
-            .setName('Italic Title for Preview')
+            .setName('Italic title for preview') // Italic Title -> Italic title
             .setDesc('Display the preview tab title in italics.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.useItalicTitle)
@@ -241,7 +226,7 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Reuse Empty Tab (Locality)')
+            .setName('Reuse empty tab (Locality)') // Reuse Empty Tab -> Reuse empty tab
             .setDesc('If the current tab is empty, open the file in it instead of creating a new one.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.reuseEmptyTab)
@@ -251,7 +236,7 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Promote Old Preview')
+            .setName('Promote old preview') // Promote Old Preview -> Promote old preview
             .setDesc('If a new preview is opened elsewhere, keep the old preview tab as a regular tab instead of closing it.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.promoteOldPreview)
@@ -261,7 +246,7 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Focus Existing Tab')
+            .setName('Focus existing tab') // Focus Existing Tab -> Focus existing tab
             .setDesc('If the file is already open, jump to that tab instead of opening it again.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.jumpToDuplicate)

@@ -39,7 +39,6 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.previewLeaf = null;
-    // [수정 2] 화살표 함수로 변경하여 'this' 스코프 문제 해결
     this.handleClick = (evt) => {
       const target = evt.target;
       const titleEl = target.closest(".nav-file-title");
@@ -58,7 +57,6 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       evt.stopImmediatePropagation();
       void this.openFileLogic(file, false);
     };
-    // [수정 2] 화살표 함수로 변경
     this.handleDblClick = (evt) => {
       const target = evt.target;
       const titleEl = target.closest(".nav-file-title");
@@ -75,15 +73,17 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       evt.stopImmediatePropagation();
       void this.openFileLogic(file, true);
     };
-    // [수정 2] 화살표 함수로 변경
     this.handleHeaderDblClick = (evt) => {
       const target = evt.target;
       const tabHeader = target.closest(".workspace-tab-header");
-      if (tabHeader && this.previewLeaf && this.previewLeaf.tabHeaderEl === tabHeader) {
-        evt.preventDefault();
-        evt.stopPropagation();
-        evt.stopImmediatePropagation();
-        this.markAsPermanent(this.previewLeaf);
+      if (tabHeader && this.previewLeaf) {
+        const previewLeafWithHeader = this.previewLeaf;
+        if (previewLeafWithHeader.tabHeaderEl === tabHeader) {
+          evt.preventDefault();
+          evt.stopPropagation();
+          evt.stopImmediatePropagation();
+          this.markAsPermanent(this.previewLeaf);
+        }
       }
     };
   }
@@ -175,16 +175,18 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   markAsPreview(leaf) {
     this.previewLeaf = leaf;
-    if (this.settings.useItalicTitle && leaf.tabHeaderEl) {
-      leaf.tabHeaderEl.classList.add(PREVIEW_CLASS);
+    const leafWithHeader = leaf;
+    if (this.settings.useItalicTitle && leafWithHeader.tabHeaderEl) {
+      leafWithHeader.tabHeaderEl.classList.add(PREVIEW_CLASS);
     }
   }
   markAsPermanent(leaf) {
     if (this.previewLeaf === leaf) {
       this.previewLeaf = null;
     }
-    if (leaf.tabHeaderEl) {
-      leaf.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+    const leafWithHeader = leaf;
+    if (leafWithHeader.tabHeaderEl) {
+      leafWithHeader.tabHeaderEl.classList.remove(PREVIEW_CLASS);
     }
   }
 };

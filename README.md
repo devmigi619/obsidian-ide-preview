@@ -44,6 +44,12 @@ You can customize the behavior in `Settings > IDE Style Preview`:
 
 Contributions are welcome! If you find a bug or have a feature request, please open an issue.
 
+## 💬 Contact & Support
+
+If you have any questions, bug reports, or feature requests, please feel free to [open an issue](https://github.com/devmigi/obsidian-ide-preview/issues) on GitHub.
+
+For direct inquiries, you can reach me at: **devmigi619@gmail.com**
+
 ## 📄 License
 
 MIT License

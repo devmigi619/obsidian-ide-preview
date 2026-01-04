@@ -1,6 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, TFile } from 'obsidian';
 
-// 설정(옵션) 데이터 구조 정의
 interface PreviewModeSettings {
     useItalicTitle: boolean;
     reuseEmptyTab: boolean;
@@ -8,7 +7,6 @@ interface PreviewModeSettings {
     jumpToDuplicate: boolean;
 }
 
-// 기본값 설정
 const DEFAULT_SETTINGS: PreviewModeSettings = {
     useItalicTitle: true,
     reuseEmptyTab: true,
@@ -23,9 +21,6 @@ export default class PreviewModePlugin extends Plugin {
     previewLeaf: WorkspaceLeaf | null = null;
 
     async onload() {
-        // [수정 3] 불필요한 콘솔 로그 제거 (가이드라인 준수)
-        // console.log('Smart Tabs Plugin loaded'); 
-
         await this.loadSettings();
         this.addSettingTab(new PreviewModeSettingTab(this.app, this));
 
@@ -211,12 +206,8 @@ class PreviewModeSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        // [수정 1] 불필요한 h2 제목 제거 (가이드라인 준수)
-        // containerEl.createEl('h2', { text: 'Smart Tabs Settings' });
-
-        // [수정 2] UI 텍스트 Sentence case 적용 (가이드라인 준수)
         new Setting(containerEl)
-            .setName('Italic title for preview') // Italic Title -> Italic title
+            .setName('Italic title for preview')
             .setDesc('Display the preview tab title in italics.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.useItalicTitle)
@@ -226,7 +217,7 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Reuse empty tab (Locality)') // Reuse Empty Tab -> Reuse empty tab
+            .setName('Reuse empty tab (Locality)')
             .setDesc('If the current tab is empty, open the file in it instead of creating a new one.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.reuseEmptyTab)
@@ -236,7 +227,7 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Promote old preview') // Promote Old Preview -> Promote old preview
+            .setName('Promote old preview')
             .setDesc('If a new preview is opened elsewhere, keep the old preview tab as a regular tab instead of closing it.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.promoteOldPreview)
@@ -246,7 +237,7 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Focus existing tab') // Focus Existing Tab -> Focus existing tab
+            .setName('Focus existing tab')
             .setDesc('If the file is already open, jump to that tab instead of opening it again.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.jumpToDuplicate)

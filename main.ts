@@ -1,5 +1,10 @@
 import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, TFile } from 'obsidian';
 
+// [수정 1] any 사용을 피하기 위해 tabHeaderEl을 포함한 커스텀 인터페이스 정의
+interface WorkspaceLeafWithHeader extends WorkspaceLeaf {
+    tabHeaderEl: HTMLElement;
+}
+
 interface PreviewModeSettings {
     useItalicTitle: boolean;
     reuseEmptyTab: boolean;
@@ -24,8 +29,6 @@ export default class PreviewModePlugin extends Plugin {
         await this.loadSettings();
         this.addSettingTab(new PreviewModeSettingTab(this.app, this));
 
-        // [수정 1] 화살표 함수 사용으로 인해 .bind() 제거됨 (봇 지적 해결)
-        
         document.addEventListener('click', this.handleClick, true);
         document.addEventListener('dblclick', this.handleDblClick, true);
         document.addEventListener('dblclick', this.handleHeaderDblClick, true);
@@ -66,7 +69,6 @@ export default class PreviewModePlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    // [수정 2] 화살표 함수로 변경하여 'this' 스코프 문제 해결
     handleClick = (evt: MouseEvent) => {
         const target = evt.target as HTMLElement;
         const titleEl = target.closest('.nav-file-title');
@@ -83,11 +85,9 @@ export default class PreviewModePlugin extends Plugin {
         evt.stopPropagation();
         evt.stopImmediatePropagation();
 
-        // [수정 3] void 연산자로 Promise 처리 명시 (봇 지적 해결)
         void this.openFileLogic(file, false);
     }
 
-    // [수정 2] 화살표 함수로 변경
     handleDblClick = (evt: MouseEvent) => {
         const target = evt.target as HTMLElement;
         const titleEl = target.closest('.nav-file-title');
@@ -103,21 +103,22 @@ export default class PreviewModePlugin extends Plugin {
         evt.stopPropagation();
         evt.stopImmediatePropagation();
 
-        // [수정 3] void 연산자 추가
         void this.openFileLogic(file, true);
     }
 
-    // [수정 2] 화살표 함수로 변경
     handleHeaderDblClick = (evt: MouseEvent) => {
         const target = evt.target as HTMLElement;
         const tabHeader = target.closest('.workspace-tab-header');
         
-        // (this.previewLeaf as any) 타입 단언 유지 (VSCode 오류 방지)
-        if (tabHeader && this.previewLeaf && (this.previewLeaf as any).tabHeaderEl === tabHeader) {
-            evt.preventDefault();
-            evt.stopPropagation();
-            evt.stopImmediatePropagation();
-            this.markAsPermanent(this.previewLeaf);
+        // [수정 2] as any 대신 as WorkspaceLeafWithHeader 사용
+        if (tabHeader && this.previewLeaf) {
+             const previewLeafWithHeader = this.previewLeaf as WorkspaceLeafWithHeader;
+             if (previewLeafWithHeader.tabHeaderEl === tabHeader) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                evt.stopImmediatePropagation();
+                this.markAsPermanent(this.previewLeaf);
+             }
         }
     }
 
@@ -177,7 +178,6 @@ export default class PreviewModePlugin extends Plugin {
                 }
             }
 
-            // [수정 4] 불필요한 ! 단언 제거 (봇 지적 해결)
             await targetLeaf.openFile(file);
             this.markAsPreview(targetLeaf);
         }
@@ -185,8 +185,10 @@ export default class PreviewModePlugin extends Plugin {
 
     markAsPreview(leaf: WorkspaceLeaf) {
         this.previewLeaf = leaf;
-        if (this.settings.useItalicTitle && (leaf as any).tabHeaderEl) {
-            (leaf as any).tabHeaderEl.classList.add(PREVIEW_CLASS);
+        // [수정 3] as any 제거 및 타입 단언 변경
+        const leafWithHeader = leaf as WorkspaceLeafWithHeader;
+        if (this.settings.useItalicTitle && leafWithHeader.tabHeaderEl) {
+            leafWithHeader.tabHeaderEl.classList.add(PREVIEW_CLASS);
         }
     }
 
@@ -194,8 +196,10 @@ export default class PreviewModePlugin extends Plugin {
         if (this.previewLeaf === leaf) {
             this.previewLeaf = null;
         }
-        if ((leaf as any).tabHeaderEl) {
-            (leaf as any).tabHeaderEl.classList.remove(PREVIEW_CLASS);
+        // [수정 4] as any 제거 및 타입 단언 변경
+        const leafWithHeader = leaf as WorkspaceLeafWithHeader;
+        if (leafWithHeader.tabHeaderEl) {
+            leafWithHeader.tabHeaderEl.classList.remove(PREVIEW_CLASS);
         }
     }
 }
@@ -223,7 +227,6 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            // [수정 5] Locality -> locality (소문자 적용)
             .setName('Reuse empty tab (locality)')
             .setDesc('If the current tab is empty, open the file in it instead of creating a new one.')
             .addToggle(toggle => toggle

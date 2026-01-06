@@ -34,7 +34,6 @@ var DEFAULT_SETTINGS = {
   promoteOldPreview: true,
   jumpToDuplicate: true,
   openNewTabAtEnd: false
-  // [기본값] VS Code 스타일 (활성 탭 옆에 열림)
 };
 var PREVIEW_CLASS = "is-preview-tab";
 var PreviewModePlugin = class extends import_obsidian.Plugin {
@@ -79,8 +78,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       const target = evt.target;
       const tabHeader = target.closest(".workspace-tab-header");
       if (tabHeader && this.previewLeaf) {
-        const previewLeafWithHeader = this.previewLeaf;
-        if (previewLeafWithHeader.tabHeaderEl === tabHeader) {
+        const extendedLeaf = this.previewLeaf;
+        if (extendedLeaf.tabHeaderEl === tabHeader) {
           evt.preventDefault();
           evt.stopPropagation();
           evt.stopImmediatePropagation();
@@ -168,7 +167,17 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
           targetLeaf = oldPreview;
           this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
         } else {
-          targetLeaf = this.app.workspace.getLeaf("tab");
+          if (this.settings.openNewTabAtEnd) {
+            const currentLeaf = activeLeaf;
+            const parent = currentLeaf.parent;
+            if (parent && parent.children) {
+              const workspace = this.app.workspace;
+              targetLeaf = workspace.createLeafInParent(parent, parent.children.length);
+            }
+          }
+          if (!targetLeaf) {
+            targetLeaf = this.app.workspace.getLeaf("tab");
+          }
         }
       }
       await targetLeaf.openFile(file);
@@ -178,18 +187,18 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   markAsPreview(leaf) {
     this.previewLeaf = leaf;
-    const leafWithHeader = leaf;
-    if (this.settings.useItalicTitle && leafWithHeader.tabHeaderEl) {
-      leafWithHeader.tabHeaderEl.classList.add(PREVIEW_CLASS);
+    const extendedLeaf = leaf;
+    if (this.settings.useItalicTitle && extendedLeaf.tabHeaderEl) {
+      extendedLeaf.tabHeaderEl.classList.add(PREVIEW_CLASS);
     }
   }
   markAsPermanent(leaf) {
     if (this.previewLeaf === leaf) {
       this.previewLeaf = null;
     }
-    const leafWithHeader = leaf;
-    if (leafWithHeader.tabHeaderEl) {
-      leafWithHeader.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+    const extendedLeaf = leaf;
+    if (extendedLeaf.tabHeaderEl) {
+      extendedLeaf.tabHeaderEl.classList.remove(PREVIEW_CLASS);
     }
   }
 };
@@ -217,7 +226,7 @@ var PreviewModeSettingTab = class extends import_obsidian.PluginSettingTab {
       this.plugin.settings.jumpToDuplicate = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Open new tab at the end").setDesc("Open new preview tabs at the end of the tab bar instead of next to the current tab. (Experimental)").addToggle((toggle) => toggle.setValue(this.plugin.settings.openNewTabAtEnd).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Open new tab at the end").setDesc("Open new preview tabs at the end of the tab bar instead of next to the current tab.").addToggle((toggle) => toggle.setValue(this.plugin.settings.openNewTabAtEnd).onChange(async (value) => {
       this.plugin.settings.openNewTabAtEnd = value;
       await this.plugin.saveSettings();
     }));

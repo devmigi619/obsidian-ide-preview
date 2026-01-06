@@ -40,6 +40,27 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.previewLeaf = null;
+    // 파일 생성 복구용 상태 / State for file creation recovery
+    this.fileCreationState = {
+      newFile: null,
+      hijackedLeaf: null,
+      oldFile: null
+    };
+    /**
+     * 입력 이벤트 처리 (제목 편집 등) / Handle input events (title editing, etc.)
+     */
+    this.handleInput = (evt) => {
+      const target = evt.target;
+      if (target.closest(".view-header") || target.classList.contains("inline-title")) {
+        const activeLeaf = this.app.workspace.getLeaf(false);
+        if (this.previewLeaf === activeLeaf) {
+          this.markAsPermanent(activeLeaf);
+        }
+      }
+    };
+    /**
+     * 싱글클릭 처리 / Handle single click
+     */
     this.handleClick = (evt) => {
       const target = evt.target;
       const titleEl = target.closest(".nav-file-title");
@@ -58,6 +79,9 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       evt.stopImmediatePropagation();
       void this.openFileLogic(file, false);
     };
+    /**
+     * 더블클릭 처리 / Handle double click
+     */
     this.handleDblClick = (evt) => {
       const target = evt.target;
       const titleEl = target.closest(".nav-file-title");
@@ -74,6 +98,9 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       evt.stopImmediatePropagation();
       void this.openFileLogic(file, true);
     };
+    /**
+     * 탭 헤더 더블클릭 처리 (임시탭 승격) / Handle tab header double click (promote preview)
+     */
     this.handleHeaderDblClick = (evt) => {
       const target = evt.target;
       const tabHeader = target.closest(".workspace-tab-header");
@@ -91,9 +118,23 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new PreviewModeSettingTab(this.app, this));
-    document.addEventListener("click", this.handleClick, true);
-    document.addEventListener("dblclick", this.handleDblClick, true);
-    document.addEventListener("dblclick", this.handleHeaderDblClick, true);
+    this.registerDomEvent(document, "click", this.handleClick, true);
+    this.registerDomEvent(document, "dblclick", this.handleDblClick, true);
+    this.registerDomEvent(document, "dblclick", this.handleHeaderDblClick, true);
+    this.registerDomEvent(document, "input", this.handleInput, true);
+    this.setupFileCreationHandling();
+    this.registerEvent(this.app.vault.on("rename", (file) => {
+      if (file instanceof import_obsidian.TFile) {
+        this.app.workspace.iterateAllLeaves((leaf) => {
+          const view = leaf.view;
+          if (view.file && view.file.path === file.path) {
+            if (this.previewLeaf === leaf) {
+              this.markAsPermanent(leaf);
+            }
+          }
+        });
+      }
+    }));
     this.registerEvent(this.app.workspace.on("editor-change", (editor, info) => {
       const activeLeaf = this.app.workspace.getLeaf(false);
       if (this.previewLeaf === activeLeaf) {
@@ -102,17 +143,115 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     }));
     this.registerEvent(this.app.workspace.on("layout-change", () => {
       if (this.previewLeaf) {
-        const exists = this.app.workspace.getLeafById(this.previewLeaf.id);
-        if (!exists) {
-          this.previewLeaf = null;
+        const leafAny = this.previewLeaf;
+        if (leafAny.id) {
+          const exists = this.app.workspace.getLeafById(leafAny.id);
+          if (!exists) {
+            this.previewLeaf = null;
+          }
         }
       }
     }));
   }
+  /**
+   * 파일 생성 감지 및 복구 로직
+   * File creation detection and recovery logic
+   * 
+   * 명확한 3단계 구성 / Clear 3-step process:
+   * 1. Snapshot: 파일 생성 시점의 상태 저장 / Save state at file creation
+   * 2. Detect: 탭 덮어쓰기 감지 / Detect tab hijacking
+   * 3. Restore: 필요시 복구 / Restore if needed
+   */
+  setupFileCreationHandling() {
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (!(file instanceof import_obsidian.TFile) || file.extension !== "md")
+        return;
+      const activeLeaf = this.app.workspace.getLeaf(false);
+      const activeFile = activeLeaf.view instanceof import_obsidian.FileView ? activeLeaf.view.file : null;
+      this.fileCreationState = {
+        newFile: file,
+        hijackedLeaf: activeLeaf,
+        oldFile: activeFile
+      };
+    }));
+    this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      if (!file || !this.fileCreationState.newFile)
+        return;
+      if (file.path !== this.fileCreationState.newFile.path)
+        return;
+      const { newFile, hijackedLeaf, oldFile } = this.fileCreationState;
+      const currentLeaf = this.app.workspace.getLeaf(false);
+      this.fileCreationState = { newFile: null, hijackedLeaf: null, oldFile: null };
+      this.handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile);
+    }));
+    this.registerEvent(this.app.vault.on("create", (file) => {
+      if (!(file instanceof import_obsidian.TFile) || file.extension !== "md")
+        return;
+      setTimeout(() => {
+        var _a;
+        if (((_a = this.fileCreationState.newFile) == null ? void 0 : _a.path) === file.path) {
+          this.fileCreationState = { newFile: null, hijackedLeaf: null, oldFile: null };
+        }
+      }, 3e3);
+    }));
+  }
+  /**
+   * 파일 생성 시나리오 처리 / Handle file creation scenarios
+   * 명확한 의사결정 트리 / Clear decision tree
+   */
+  async handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile) {
+    const currentLeafId = currentLeaf.id;
+    const hijackedLeafId = hijackedLeaf == null ? void 0 : hijackedLeaf.id;
+    if (currentLeafId !== hijackedLeafId) {
+      setTimeout(() => {
+        this.markAsPermanent(currentLeaf);
+        if (this.previewLeaf && this.previewLeaf !== currentLeaf && this.isSamePanel(this.previewLeaf, currentLeaf)) {
+          this.markAsPermanent(this.previewLeaf);
+        }
+      }, 0);
+      return;
+    }
+    if (!oldFile || oldFile.path === newFile.path) {
+      setTimeout(() => {
+        this.markAsPermanent(currentLeaf);
+        if (!oldFile && this.previewLeaf && this.previewLeaf !== currentLeaf && this.isSamePanel(this.previewLeaf, currentLeaf)) {
+          this.markAsPermanent(this.previewLeaf);
+        }
+      }, 0);
+      return;
+    }
+    setTimeout(async () => {
+      await this.restoreHijackedTab(currentLeaf, oldFile, newFile);
+    }, 0);
+  }
+  /**
+   * 덮어씌워진 탭 복구 / Restore hijacked tab
+   */
+  async restoreHijackedTab(hijackedLeaf, oldFile, newFile) {
+    const extLeaf = hijackedLeaf;
+    const parent = extLeaf.parent;
+    if (!parent || !parent.children) {
+      this.markAsPermanent(hijackedLeaf);
+      return;
+    }
+    const hijackedIndex = parent.children.indexOf(extLeaf);
+    if (hijackedIndex === -1) {
+      this.markAsPermanent(hijackedLeaf);
+      return;
+    }
+    const wasPreview = this.previewLeaf === hijackedLeaf;
+    const workspace = this.app.workspace;
+    const restoredLeaf = workspace.createLeafInParent(parent, hijackedIndex);
+    await restoredLeaf.openFile(oldFile);
+    if (wasPreview) {
+      this.markAsPermanent(restoredLeaf);
+    } else {
+      this.markAsPermanent(restoredLeaf);
+    }
+    this.app.workspace.setActiveLeaf(hijackedLeaf, { focus: true });
+    this.markAsPermanent(hijackedLeaf);
+  }
   onunload() {
-    document.removeEventListener("click", this.handleClick, true);
-    document.removeEventListener("dblclick", this.handleDblClick, true);
-    document.removeEventListener("dblclick", this.handleHeaderDblClick, true);
     document.querySelectorAll(`.${PREVIEW_CLASS}`).forEach((el) => {
       el.classList.remove(PREVIEW_CLASS);
     });
@@ -123,14 +262,13 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
+  /**
+   * 파일 열기 로직 - 명확한 의사결정 트리
+   * File opening logic - Clear decision tree
+   */
   async openFileLogic(file, isDoubleClick) {
     if (this.settings.jumpToDuplicate) {
-      let existingLeaf = null;
-      this.app.workspace.iterateAllLeaves((leaf) => {
-        if (leaf.view.file && leaf.view.file.path === file.path) {
-          existingLeaf = leaf;
-        }
-      });
+      const existingLeaf = this.findLeafWithFile(file);
       if (existingLeaf) {
         this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
         if (isDoubleClick)
@@ -139,52 +277,102 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       }
     }
     if (isDoubleClick) {
-      if (this.previewLeaf && this.previewLeaf.view.file && this.previewLeaf.view.file.path === file.path) {
-        this.markAsPermanent(this.previewLeaf);
-      } else {
-        const leaf = this.app.workspace.getLeaf("tab");
-        await leaf.openFile(file);
-        this.markAsPermanent(leaf);
-      }
-    } else {
-      const activeLeaf = this.app.workspace.getLeaf(false);
-      const oldPreview = this.previewLeaf;
-      let targetLeaf = null;
-      const isOldPreviewValid = oldPreview && this.app.workspace.getLeafById(oldPreview.id);
-      if (this.settings.reuseEmptyTab && activeLeaf.view.getViewType() === "empty") {
-        targetLeaf = activeLeaf;
-        if (isOldPreviewValid && oldPreview !== targetLeaf) {
-          if (this.settings.promoteOldPreview) {
-            this.markAsPermanent(oldPreview);
-          } else {
-            oldPreview.detach();
-          }
-        }
-      } else if (activeLeaf === oldPreview) {
-        targetLeaf = activeLeaf;
-      } else {
-        if (isOldPreviewValid) {
-          targetLeaf = oldPreview;
-          this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-        } else {
-          if (this.settings.openNewTabAtEnd) {
-            const currentLeaf = activeLeaf;
-            const parent = currentLeaf.parent;
-            if (parent && parent.children) {
-              const workspace = this.app.workspace;
-              targetLeaf = workspace.createLeafInParent(parent, parent.children.length);
-            }
-          }
-          if (!targetLeaf) {
-            targetLeaf = this.app.workspace.getLeaf("tab");
-          }
-        }
-      }
-      await targetLeaf.openFile(file);
-      this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-      this.markAsPreview(targetLeaf);
+      await this.handleDoubleClick(file);
+      return;
     }
+    await this.handleSingleClick(file);
   }
+  /**
+   * 더블클릭: 항상 일반탭으로 열기
+   * Double click: Always open as permanent tab
+   */
+  async handleDoubleClick(file) {
+    var _a, _b;
+    const previewView = (_a = this.previewLeaf) == null ? void 0 : _a.view;
+    if (this.previewLeaf && ((_b = previewView == null ? void 0 : previewView.file) == null ? void 0 : _b.path) === file.path) {
+      this.markAsPermanent(this.previewLeaf);
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.markAsPermanent(leaf);
+  }
+  /**
+   * 싱글클릭: 임시탭으로 열기 (복잡한 로직)
+   * Single click: Open as preview tab (complex logic)
+   */
+  async handleSingleClick(file) {
+    const activeLeaf = this.app.workspace.getLeaf(false);
+    const oldPreview = this.previewLeaf;
+    const isOldPreviewValid = this.isLeafValid(oldPreview);
+    if (activeLeaf.view.getViewType() === "empty") {
+      if (isOldPreviewValid && oldPreview !== activeLeaf && this.isSamePanel(oldPreview, activeLeaf)) {
+        this.markAsPermanent(oldPreview);
+      }
+      await activeLeaf.openFile(file);
+      this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+      this.markAsPreview(activeLeaf);
+      return;
+    }
+    if (activeLeaf === oldPreview) {
+      await activeLeaf.openFile(file);
+      this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+      this.markAsPreview(activeLeaf);
+      return;
+    }
+    if (isOldPreviewValid) {
+      await oldPreview.openFile(file);
+      this.app.workspace.setActiveLeaf(oldPreview, { focus: true });
+      this.markAsPreview(oldPreview);
+      return;
+    }
+    const newLeaf = await this.createNewTabForPreview(activeLeaf);
+    await newLeaf.openFile(file);
+    this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
+    this.markAsPreview(newLeaf);
+  }
+  /**
+   * 임시탭용 새 탭 생성 / Create new tab for preview
+   */
+  async createNewTabForPreview(activeLeaf) {
+    if (this.settings.openNewTabAtEnd) {
+      const extLeaf = activeLeaf;
+      const parent = extLeaf.parent;
+      if (parent == null ? void 0 : parent.children) {
+        const workspace = this.app.workspace;
+        return workspace.createLeafInParent(parent, parent.children.length);
+      }
+    }
+    return this.app.workspace.getLeaf("tab");
+  }
+  /**
+   * 특정 파일을 가진 탭 찾기 / Find tab with specific file
+   */
+  findLeafWithFile(file) {
+    let result = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      var _a;
+      const view = leaf.view;
+      if (((_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) === file.path) {
+        result = leaf;
+      }
+    });
+    return result;
+  }
+  /**
+   * 두 탭이 같은 패널(부모)에 있는지 확인
+   * Check if two leaves are in the same panel (parent)
+   */
+  isSamePanel(leaf1, leaf2) {
+    if (!leaf1 || !leaf2)
+      return false;
+    const parent1 = leaf1.parent;
+    const parent2 = leaf2.parent;
+    return parent1 === parent2;
+  }
+  /**
+   * 임시탭으로 표시 / Mark as preview tab
+   */
   markAsPreview(leaf) {
     this.previewLeaf = leaf;
     const extendedLeaf = leaf;
@@ -192,6 +380,9 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       extendedLeaf.tabHeaderEl.classList.add(PREVIEW_CLASS);
     }
   }
+  /**
+   * 일반탭으로 승격 / Promote to permanent tab
+   */
   markAsPermanent(leaf) {
     if (this.previewLeaf === leaf) {
       this.previewLeaf = null;

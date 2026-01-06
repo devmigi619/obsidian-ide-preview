@@ -32,7 +32,9 @@ var DEFAULT_SETTINGS = {
   useItalicTitle: true,
   reuseEmptyTab: true,
   promoteOldPreview: true,
-  jumpToDuplicate: true
+  jumpToDuplicate: true,
+  openNewTabAtEnd: false
+  // [기본값] VS Code 스타일 (활성 탭 옆에 열림)
 };
 var PREVIEW_CLASS = "is-preview-tab";
 var PreviewModePlugin = class extends import_obsidian.Plugin {
@@ -213,6 +215,10 @@ var PreviewModeSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     new import_obsidian.Setting(containerEl).setName("Focus existing tab").setDesc("If the file is already open, jump to that tab instead of opening it again.").addToggle((toggle) => toggle.setValue(this.plugin.settings.jumpToDuplicate).onChange(async (value) => {
       this.plugin.settings.jumpToDuplicate = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Open new tab at the end").setDesc("Open new preview tabs at the end of the tab bar instead of next to the current tab. (Experimental)").addToggle((toggle) => toggle.setValue(this.plugin.settings.openNewTabAtEnd).onChange(async (value) => {
+      this.plugin.settings.openNewTabAtEnd = value;
       await this.plugin.saveSettings();
     }));
   }

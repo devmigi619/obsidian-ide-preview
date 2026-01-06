@@ -170,6 +170,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
         }
       }
       await targetLeaf.openFile(file);
+      this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
       this.markAsPreview(targetLeaf);
     }
   }

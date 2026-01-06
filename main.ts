@@ -1,6 +1,6 @@
 import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, TFile } from 'obsidian';
 
-// [수정 1] any 사용을 피하기 위해 tabHeaderEl을 포함한 커스텀 인터페이스 정의
+// Any 타입 오류 방지를 위한 커스텀 인터페이스
 interface WorkspaceLeafWithHeader extends WorkspaceLeaf {
     tabHeaderEl: HTMLElement;
 }
@@ -110,7 +110,6 @@ export default class PreviewModePlugin extends Plugin {
         const target = evt.target as HTMLElement;
         const tabHeader = target.closest('.workspace-tab-header');
         
-        // [수정 2] as any 대신 as WorkspaceLeafWithHeader 사용
         if (tabHeader && this.previewLeaf) {
              const previewLeafWithHeader = this.previewLeaf as WorkspaceLeafWithHeader;
              if (previewLeafWithHeader.tabHeaderEl === tabHeader) {
@@ -178,14 +177,15 @@ export default class PreviewModePlugin extends Plugin {
                 }
             }
 
+            // [수정: 중요] 파일을 연 후, 해당 탭으로 포커스를 강제로 이동시킴
             await targetLeaf.openFile(file);
+            this.app.workspace.setActiveLeaf(targetLeaf, { focus: true }); // <--- 이 줄이 핵심입니다!
             this.markAsPreview(targetLeaf);
         }
     }
 
     markAsPreview(leaf: WorkspaceLeaf) {
         this.previewLeaf = leaf;
-        // [수정 3] as any 제거 및 타입 단언 변경
         const leafWithHeader = leaf as WorkspaceLeafWithHeader;
         if (this.settings.useItalicTitle && leafWithHeader.tabHeaderEl) {
             leafWithHeader.tabHeaderEl.classList.add(PREVIEW_CLASS);
@@ -196,7 +196,6 @@ export default class PreviewModePlugin extends Plugin {
         if (this.previewLeaf === leaf) {
             this.previewLeaf = null;
         }
-        // [수정 4] as any 제거 및 타입 단언 변경
         const leafWithHeader = leaf as WorkspaceLeafWithHeader;
         if (leafWithHeader.tabHeaderEl) {
             leafWithHeader.tabHeaderEl.classList.remove(PREVIEW_CLASS);

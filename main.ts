@@ -10,13 +10,15 @@ interface PreviewModeSettings {
     reuseEmptyTab: boolean;
     promoteOldPreview: boolean;
     jumpToDuplicate: boolean;
+    openNewTabAtEnd: boolean; // [추가] 새 탭 위치 옵션
 }
 
 const DEFAULT_SETTINGS: PreviewModeSettings = {
     useItalicTitle: true,
     reuseEmptyTab: true,
     promoteOldPreview: true,
-    jumpToDuplicate: true
+    jumpToDuplicate: true,
+    openNewTabAtEnd: false // [기본값] VS Code 스타일 (활성 탭 옆에 열림)
 }
 
 const PREVIEW_CLASS = 'is-preview-tab';
@@ -85,6 +87,7 @@ export default class PreviewModePlugin extends Plugin {
         evt.stopPropagation();
         evt.stopImmediatePropagation();
 
+        // Promise 처리를 위해 void 연산자 사용
         void this.openFileLogic(file, false);
     }
 
@@ -171,15 +174,23 @@ export default class PreviewModePlugin extends Plugin {
             else {
                 if (isOldPreviewValid) {
                     targetLeaf = oldPreview;
+                    // 미리보기 탭을 다시 쓸 때도 포커스를 줍니다.
                     this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
                 } else {
+                    // 새 탭 생성
+                    // (참고: 옵시디언 API는 기본적으로 활성 탭 옆에 새 탭을 엽니다.)
                     targetLeaf = this.app.workspace.getLeaf('tab');
                 }
             }
 
-            // [수정: 중요] 파일을 연 후, 해당 탭으로 포커스를 강제로 이동시킴
+            // [수정: setTimeout 제거 및 정석 처리]
+            // 파일을 완전히 열 때까지 기다립니다(await).
             await targetLeaf.openFile(file);
-            this.app.workspace.setActiveLeaf(targetLeaf, { focus: true }); // <--- 이 줄이 핵심입니다!
+            
+            // 파일이 열린 직후, 해당 탭(Leaf)을 '활성화(Active)' 상태로 만듭니다.
+            // 이렇게 하면 화면이 즉시 해당 탭으로 전환됩니다.
+            this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+
             this.markAsPreview(targetLeaf);
         }
     }
@@ -252,6 +263,17 @@ class PreviewModeSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.jumpToDuplicate)
                 .onChange(async (value) => {
                     this.plugin.settings.jumpToDuplicate = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        // [추가] 새 탭 위치 옵션 UI
+        new Setting(containerEl)
+            .setName('Open new tab at the end')
+            .setDesc('Open new preview tabs at the end of the tab bar instead of next to the current tab. (Experimental)')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.openNewTabAtEnd)
+                .onChange(async (value) => {
+                    this.plugin.settings.openNewTabAtEnd = value;
                     await this.plugin.saveSettings();
                 }));
     }

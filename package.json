@@ -1,6 +1,6 @@
 {
   "name": "ide-style-preview",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Smart Tabs (VS Code Style) - Replicates VS Code tab behavior in Obsidian",
   "main": "main.js",
   "scripts": {

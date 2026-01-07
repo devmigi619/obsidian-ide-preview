@@ -40,11 +40,32 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     /**
-     * ✅ 패널별 preview leaf 관리
-     * key: 패널(parent), value: 해당 패널의 preview leaf
+     * ✅ 패널별 preview leaf 관리 / Per-panel preview leaf state
+     *
+     * KR:
+     *  - 패널(탭 그룹)마다 preview 탭을 최대 1개로 유지합니다.
+     *  - 패널 식별자는 공식 API가 없어 leaf.parent를 best-effort로 사용합니다.
+     *  - layout-change 시 cleanup으로 stale 상태를 정리합니다.
+     *
+     * EN:
+     *  - Keep at most one preview tab per panel (tab group).
+     *  - We use leaf.parent as a best-effort panel identity (no official public panel id API).
+     *  - Cleanup on layout changes to prevent stale state.
      */
     this.previewByPanel = /* @__PURE__ */ new Map();
-    // 파일 생성 복구용 상태 / State for file creation recovery
+    /**
+     * 파일 생성 "복구"용 상태 / State for file-creation "restore"
+     *
+     * KR:
+     *  - 새 노트 생성 과정에서, 기존 탭이 새 파일로 덮어써지는(하이재킹) 경우가 있습니다.
+     *  - create 시점에 스냅샷을 저장하고, file-open에서 새 파일이 실제로 열렸을 때만 복구 로직을 실행합니다.
+     *  - 시간(예: 3초) 기반이 아니라 이벤트(file-open) 기반으로 상태를 소비/폐기합니다.
+     *
+     * EN:
+     *  - During new note creation, an existing tab can be "hijacked" (overwritten) by the new file.
+     *  - We snapshot on vault 'create', then restore only when workspace 'file-open' confirms the new file is opened.
+     *  - State is consumed/discarded event-driven (file-open), not time-based.
+     */
     this.fileCreationState = {
       newFile: null,
       hijackedLeaf: null,
@@ -52,6 +73,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     };
     /**
      * 입력 이벤트: preview에서 편집/제목 수정 등 시작되면 승격
+     * Input event: promote preview to permanent when editing starts
      */
     this.handleInput = (evt) => {
       const target = evt.target;
@@ -64,6 +86,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     };
     /**
      * 싱글클릭: preview로 열기 (✅ 패널별 preview 1개 유지)
+     * Single click: open as preview (keep 1 preview per panel)
      */
     this.handleClick = (evt) => {
       const target = evt.target;
@@ -87,6 +110,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     };
     /**
      * 더블클릭: 일반탭으로 열기 (✅ 활성 패널 내부에서만 동작)
+     * Double click: open as permanent (only within the active panel)
      */
     this.handleDblClick = (evt) => {
       const target = evt.target;
@@ -108,6 +132,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     };
     /**
      * 탭 헤더 더블클릭: 해당 패널의 preview면 승격
+     * Double click on tab header: promote preview (per panel)
      */
     this.handleHeaderDblClick = (evt) => {
       const target = evt.target;
@@ -178,7 +203,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     await this.saveData(this.settings);
   }
   /**
-   * 파일 생성 감지 및 복구 로직 (✅ 타이머 제거: 다음 file-open 이벤트로만 정리)
+   * 파일 생성 감지 및 복구 로직 (✅ 이벤트 기반)
+   * File creation detection & restore (event-driven)
    */
   setupFileCreationHandling() {
     this.registerEvent(
@@ -211,7 +237,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     );
   }
   /**
-   * 파일 생성 시나리오 처리
+   * 파일 생성 시나리오 처리 / Handle file creation scenarios
    */
   async handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile) {
     const hijackedSame = hijackedLeaf ? currentLeaf === hijackedLeaf : false;
@@ -239,7 +265,10 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     }, 0);
   }
   /**
-   * 덮어씌워진 탭 복구
+   * 덮어씌워진 탭 복구 / Restore hijacked tab
+   *
+   * Track 2 hardening:
+   * - Wrap `createLeafInParent` with try/catch to avoid hard failures if internals change.
    */
   async restoreHijackedTab(hijackedLeaf, oldFile) {
     const extLeaf = hijackedLeaf;
@@ -254,28 +283,53 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       return;
     }
     const workspace = this.app.workspace;
-    const restoredLeaf = workspace.createLeafInParent(parent, hijackedIndex);
-    await restoredLeaf.openFile(oldFile);
-    this.markAsPermanent(restoredLeaf);
+    let restoredLeaf = null;
+    try {
+      restoredLeaf = workspace.createLeafInParent(parent, hijackedIndex);
+    } catch (e) {
+      restoredLeaf = null;
+    }
+    if (restoredLeaf) {
+      await restoredLeaf.openFile(oldFile);
+      this.markAsPermanent(restoredLeaf);
+    } else {
+      const fallbackLeaf = this.app.workspace.getLeaf("tab");
+      await fallbackLeaf.openFile(oldFile);
+      this.markAsPermanent(fallbackLeaf);
+    }
     this.app.workspace.setActiveLeaf(hijackedLeaf, { focus: true });
     this.markAsPermanent(hijackedLeaf);
   }
   /**
-   * 클릭이 파일 탐색기에서 왔는지 좁게 추정
+   * 클릭이 파일 탐색기에서 왔는지 좁게 추정 / Narrow scope to File Explorer
    */
   isFromFileExplorer(target) {
     return !!target.closest('.workspace-leaf-content[data-type="file-explorer"]') || !!target.closest(".nav-files-container");
   }
   /**
-   * 파일 열기 로직
-   * - ✅ 패널 독립: 중복탭 포커스도 "같은 패널"에서만
-   * - ✅ 더블클릭도 활성 패널에서만 새 탭 생성/포커스
+   * 파일 열기 로직 / File open logic
+   *
+   * Track 2.1 hardening (A):
+   * KR:
+   *  - 클릭 이벤트를 가로채므로(preventDefault), 여기서 "패널 식별 실패"가 나면 무반응이 됩니다.
+   *  - 따라서 panel을 못 잡아도, 최소한 현재 leaf에라도 파일을 열어 UX를 보장합니다.
+   *
+   * EN:
+   *  - Since we intercept clicks (preventDefault), failing to detect a panel would cause "no-op".
+   *  - If panel identity is unavailable, we still open the file in the active leaf as a fallback.
    */
   async openFileLogic(file, isDoubleClick) {
     const activeLeaf = this.app.workspace.getLeaf(false);
     const panel = this.getPanelParent(activeLeaf);
-    if (!panel)
+    if (!panel) {
+      await activeLeaf.openFile(file);
+      this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+      if (isDoubleClick)
+        this.markAsPermanent(activeLeaf);
+      else
+        this.markAsPreview(activeLeaf);
       return;
+    }
     if (this.settings.jumpToDuplicate) {
       const existingLeaf = this.findLeafWithFileInPanel(file, panel);
       if (existingLeaf) {
@@ -294,12 +348,17 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 더블클릭: 활성 패널 안에서만 "일반탭"으로 열기
+   * Double click: open as permanent within the active panel
    */
   async handleDoubleClickInPanel(file, activeLeaf) {
     var _a;
     const panel = this.getPanelParent(activeLeaf);
-    if (!panel)
+    if (!panel) {
+      await activeLeaf.openFile(file);
+      this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+      this.markAsPermanent(activeLeaf);
       return;
+    }
     const preview = this.getPreviewLeafForPanel(panel);
     const previewView = preview == null ? void 0 : preview.view;
     if (preview && ((_a = previewView == null ? void 0 : previewView.file) == null ? void 0 : _a.path) === file.path) {
@@ -314,11 +373,16 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 싱글클릭: 활성 패널 안에서만 preview로 열기 (패널별 preview 1개 유지)
+   * Single click: open as preview within the active panel (one preview per panel)
    */
   async handleSingleClickInPanel(file, activeLeaf) {
     const panel = this.getPanelParent(activeLeaf);
-    if (!panel)
+    if (!panel) {
+      await activeLeaf.openFile(file);
+      this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+      this.markAsPreview(activeLeaf);
       return;
+    }
     const preview = this.getPreviewLeafForPanel(panel);
     const previewValid = preview ? this.isLeafStillPresent(preview) : false;
     const isActiveEmpty = activeLeaf.view.getViewType() === "empty";
@@ -358,6 +422,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 같은 패널에 새 탭 생성 (가능하면 createLeafInParent 사용)
+   * Create a new tab in the same panel (best-effort)
    */
   async createNewTabInSamePanel(activeLeaf) {
     const panel = this.getPanelParent(activeLeaf);
@@ -376,6 +441,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 같은 패널에서 특정 파일이 열린 leaf 찾기
+   * Find a leaf that already has the file open in the same panel
    */
   findLeafWithFileInPanel(file, panel) {
     let result = null;
@@ -391,7 +457,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     return result;
   }
   /**
-   * 패널 parent 추출
+   * 패널 parent 추출 (best-effort)
+   * Extract panel identity (best-effort)
    */
   getPanelParent(leaf) {
     const p = leaf.parent;
@@ -399,6 +466,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 두 leaf가 같은 패널인지
+   * Check whether two leaves belong to the same panel
    */
   isSamePanel(leaf1, leaf2) {
     if (!leaf1 || !leaf2)
@@ -409,6 +477,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 해당 패널의 preview leaf 가져오기(유효성 포함)
+   * Get preview leaf for a panel (with validity checks)
    */
   getPreviewLeafForPanel(panel) {
     var _a;
@@ -423,6 +492,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * leaf가 "자기 패널의 preview"인지 확인
+   * Check if the leaf is the preview leaf for its panel
    */
   isPanelPreviewLeaf(leaf) {
     const panel = this.getPanelParent(leaf);
@@ -433,6 +503,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * layout-change 등에서 previewByPanel 정리
+   * Cleanup preview map on layout changes
    */
   cleanupPreviewMap() {
     for (const [panel, leaf] of this.previewByPanel.entries()) {
@@ -443,6 +514,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 공식 API 기반으로 "leaf가 워크스페이스에 아직 존재하는지" 확인
+   * Check whether a leaf is still present in the workspace (public iteration)
    */
   isLeafStillPresent(leaf) {
     let present = false;
@@ -454,6 +526,15 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * preview 표시(패널별로 저장)
+   * Mark as preview (per panel)
+   *
+   * KR:
+   *  - tabHeaderEl이 없으면 스타일링만 스킵합니다.
+   *  - 이 경우에도 previewByPanel 상태는 유지되어 "임시탭 동작"은 계속됩니다.
+   *
+   * EN:
+   *  - If tabHeaderEl is unavailable, we skip styling only.
+   *  - Even then, previewByPanel state is kept, so preview behavior still works.
    */
   markAsPreview(leaf) {
     const panel = this.getPanelParent(leaf);
@@ -471,6 +552,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   }
   /**
    * 일반탭 승격(패널별 preview 해제)
+   * Promote to permanent (remove per-panel preview mark)
    */
   markAsPermanent(leaf) {
     const panel = this.getPanelParent(leaf);
@@ -494,31 +576,41 @@ var PreviewModeSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Italic title for preview").setDesc("Display the preview tab title in italics.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Italic title for preview").setDesc(
+      "Show preview tabs with italic titles (best-effort UI). / \uBBF8\uB9AC\uBCF4\uAE30 \uD0ED \uC81C\uBAA9\uC744 \uC774\uD0E4\uB9AD\uC73C\uB85C \uD45C\uC2DC\uD569\uB2C8\uB2E4(\uD45C\uC2DC\uC6A9, best-effort)."
+    ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.useItalicTitle).onChange(async (value) => {
         this.plugin.settings.useItalicTitle = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Reuse empty tab (locality)").setDesc("If the current tab is empty, open the file in it instead of creating a new one.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Reuse empty tab (locality)").setDesc(
+      "Use the active empty tab in the current panel for opening files. / \uD604\uC7AC \uD328\uB110\uC758 \uBE48 \uD0ED\uC744 \uC6B0\uC120 \uC7AC\uC0AC\uC6A9\uD569\uB2C8\uB2E4."
+    ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.reuseEmptyTab).onChange(async (value) => {
         this.plugin.settings.reuseEmptyTab = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Promote old preview (same panel only)").setDesc("When moving preview within a panel, promote the old preview to a regular tab.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Promote old preview (same panel only)").setDesc(
+      "When moving preview within a panel, keep the old preview as a permanent tab. / \uAC19\uC740 \uD328\uB110\uC5D0\uC11C \uBBF8\uB9AC\uBCF4\uAE30 \uC704\uCE58\uB97C \uC62E\uAE38 \uB54C \uAE30\uC874 \uBBF8\uB9AC\uBCF4\uAE30\uB97C \uC77C\uBC18 \uD0ED\uC73C\uB85C \uB0A8\uAE41\uB2C8\uB2E4."
+    ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.promoteOldPreview).onChange(async (value) => {
         this.plugin.settings.promoteOldPreview = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Focus existing tab (same panel only)").setDesc("If the file is already open in the same panel, focus it instead of opening it again.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Focus existing tab (same panel only)").setDesc(
+      "If the file is already open in the same panel, focus it instead of opening a duplicate. / \uAC19\uC740 \uD328\uB110\uC5D0 \uC774\uBBF8 \uC5F4\uB824 \uC788\uC73C\uBA74 \uADF8 \uD0ED\uC73C\uB85C \uC774\uB3D9\uD569\uB2C8\uB2E4."
+    ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.jumpToDuplicate).onChange(async (value) => {
         this.plugin.settings.jumpToDuplicate = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Open new tab at the end").setDesc("Open new tabs at the end of the tab bar instead of next to the current tab.").addToggle(
+    new import_obsidian.Setting(containerEl).setName("Open new tab at the end").setDesc(
+      "Create new tabs at the end of the tab bar in the current panel. / \uD604\uC7AC \uD328\uB110\uC758 \uD0ED\uBC14 \uB05D\uC5D0 \uC0C8 \uD0ED\uC744 \uB9CC\uB4ED\uB2C8\uB2E4."
+    ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.openNewTabAtEnd).onChange(async (value) => {
         this.plugin.settings.openNewTabAtEnd = value;
         await this.plugin.saveSettings();

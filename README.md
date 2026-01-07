@@ -1,3 +1,5 @@
+![Smart Tabs demo](assets/preview-tabs.gif)
+
 # ⚡ Smart Tabs (VS Code Style)
 
 > Stop tab clutter. Browse notes like an IDE — with **panel-isolated preview tabs**.

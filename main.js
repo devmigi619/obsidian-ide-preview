@@ -140,8 +140,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       if (!tabHeader)
         return;
       for (const [, leaf] of this.previewByPanel.entries()) {
-        const ext = leaf;
-        if (ext.tabHeaderEl === tabHeader) {
+        const headerEl = this.getTabHeaderEl(leaf);
+        if (headerEl && headerEl === tabHeader) {
           evt.preventDefault();
           evt.stopPropagation();
           evt.stopImmediatePropagation();
@@ -164,9 +164,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
         if (!(file instanceof import_obsidian.TFile))
           return;
         this.app.workspace.iterateAllLeaves((leaf) => {
-          var _a;
-          const view = leaf.view;
-          if (((_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) !== file.path)
+          const openedPath = this.getLeafFilePath(leaf);
+          if (openedPath !== file.path)
             return;
           if (this.isPanelPreviewLeaf(leaf)) {
             this.markAsPermanent(leaf);
@@ -176,7 +175,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("editor-change", (_editor, info) => {
-        const leafFromInfo = info == null ? void 0 : info.leaf;
+        const infoObj = info;
+        const leafFromInfo = typeof infoObj === "object" && infoObj !== null ? infoObj.leaf : void 0;
         const leaf = leafFromInfo != null ? leafFromInfo : this.app.workspace.getLeaf(false);
         if (this.isPanelPreviewLeaf(leaf)) {
           this.markAsPermanent(leaf);
@@ -232,14 +232,14 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
         const { newFile, hijackedLeaf, oldFile } = state;
         this.fileCreationState = { newFile: null, hijackedLeaf: null, oldFile: null };
         const currentLeaf = this.app.workspace.getLeaf(false);
-        void this.handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile);
+        this.handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile);
       })
     );
   }
   /**
    * 파일 생성 시나리오 처리 / Handle file creation scenarios
    */
-  async handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile) {
+  handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile) {
     const hijackedSame = hijackedLeaf ? currentLeaf === hijackedLeaf : false;
     if (!hijackedSame) {
       setTimeout(() => {
@@ -271,13 +271,12 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
    * - Wrap `createLeafInParent` with try/catch to avoid hard failures if internals change.
    */
   async restoreHijackedTab(hijackedLeaf, oldFile) {
-    const extLeaf = hijackedLeaf;
-    const parent = extLeaf.parent;
+    const parent = this.getPanelParent(hijackedLeaf);
     if (!parent || !parent.children) {
       this.markAsPermanent(hijackedLeaf);
       return;
     }
-    const hijackedIndex = parent.children.indexOf(extLeaf);
+    const hijackedIndex = parent.children.indexOf(hijackedLeaf);
     if (hijackedIndex === -1) {
       this.markAsPermanent(hijackedLeaf);
       return;
@@ -309,7 +308,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   /**
    * 파일 열기 로직 / File open logic
    *
-   * Track 2.1 hardening (A):
+   * Track 2.1 hardening:
    * KR:
    *  - 클릭 이벤트를 가로채므로(preventDefault), 여기서 "패널 식별 실패"가 나면 무반응이 됩니다.
    *  - 따라서 panel을 못 잡아도, 최소한 현재 leaf에라도 파일을 열어 UX를 보장합니다.
@@ -324,10 +323,11 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     if (!panel) {
       await activeLeaf.openFile(file);
       this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
-      if (isDoubleClick)
+      if (isDoubleClick) {
         this.markAsPermanent(activeLeaf);
-      else
-        this.markAsPreview(activeLeaf);
+      } else {
+        this.applyPreviewStyling(activeLeaf);
+      }
       return;
     }
     if (this.settings.jumpToDuplicate) {
@@ -351,7 +351,6 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
    * Double click: open as permanent within the active panel
    */
   async handleDoubleClickInPanel(file, activeLeaf) {
-    var _a;
     const panel = this.getPanelParent(activeLeaf);
     if (!panel) {
       await activeLeaf.openFile(file);
@@ -360,13 +359,12 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       return;
     }
     const preview = this.getPreviewLeafForPanel(panel);
-    const previewView = preview == null ? void 0 : preview.view;
-    if (preview && ((_a = previewView == null ? void 0 : previewView.file) == null ? void 0 : _a.path) === file.path) {
+    if (preview && this.getLeafFilePath(preview) === file.path) {
       this.markAsPermanent(preview);
       this.app.workspace.setActiveLeaf(preview, { focus: true });
       return;
     }
-    const leaf = await this.createNewTabInSamePanel(activeLeaf);
+    const leaf = this.createNewTabInSamePanel(activeLeaf);
     await leaf.openFile(file);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.markAsPermanent(leaf);
@@ -380,7 +378,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     if (!panel) {
       await activeLeaf.openFile(file);
       this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
-      this.markAsPreview(activeLeaf);
+      this.applyPreviewStyling(activeLeaf);
       return;
     }
     const preview = this.getPreviewLeafForPanel(panel);
@@ -415,7 +413,7 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
       this.markAsPreview(preview);
       return;
     }
-    const newLeaf = await this.createNewTabInSamePanel(activeLeaf);
+    const newLeaf = this.createNewTabInSamePanel(activeLeaf);
     await newLeaf.openFile(file);
     this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
     this.markAsPreview(newLeaf);
@@ -424,17 +422,17 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
    * 같은 패널에 새 탭 생성 (가능하면 createLeafInParent 사용)
    * Create a new tab in the same panel (best-effort)
    */
-  async createNewTabInSamePanel(activeLeaf) {
+  createNewTabInSamePanel(activeLeaf) {
     const panel = this.getPanelParent(activeLeaf);
     if (!panel || !panel.children) {
       return this.app.workspace.getLeaf("tab");
     }
-    const extActive = activeLeaf;
-    const parent = extActive.parent;
     const workspace = this.app.workspace;
-    const index = this.settings.openNewTabAtEnd ? parent.children.length : Math.max(0, parent.children.indexOf(extActive) + 1);
+    const activeIndex = panel.children.indexOf(activeLeaf);
+    const nextToActive = Math.max(0, activeIndex + 1);
+    const index = this.settings.openNewTabAtEnd ? panel.children.length : nextToActive;
     try {
-      return workspace.createLeafInParent(parent, index);
+      return workspace.createLeafInParent(panel, index);
     } catch (e) {
       return this.app.workspace.getLeaf("tab");
     }
@@ -446,9 +444,8 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   findLeafWithFileInPanel(file, panel) {
     let result = null;
     this.app.workspace.iterateAllLeaves((leaf) => {
-      var _a;
-      const view = leaf.view;
-      if (((_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) !== file.path)
+      const openedPath = this.getLeafFilePath(leaf);
+      if (openedPath !== file.path)
         return;
       const p = this.getPanelParent(leaf);
       if (p === panel)
@@ -459,10 +456,14 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
   /**
    * 패널 parent 추출 (best-effort)
    * Extract panel identity (best-effort)
+   *
+   * KR: 공식적인 패널 ID가 없어서 leaf.parent를 사용합니다.
+   * EN: No official panel id; using leaf.parent as best-effort identity.
    */
   getPanelParent(leaf) {
-    const p = leaf.parent;
-    return p != null ? p : null;
+    var _a;
+    const obj = leaf;
+    return (_a = obj.parent) != null ? _a : null;
   }
   /**
    * 두 leaf가 같은 패널인지
@@ -525,6 +526,40 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
     return present;
   }
   /**
+   * leaf.view에서 현재 열린 파일 경로를 안전하게 추출
+   * Safely extract opened file path from leaf.view
+   */
+  getLeafFilePath(leaf) {
+    var _a;
+    const view = leaf.view;
+    if (typeof view !== "object" || view === null)
+      return null;
+    const v = view;
+    const path = (_a = v.file) == null ? void 0 : _a.path;
+    return typeof path === "string" ? path : null;
+  }
+  /**
+   * 탭 헤더 엘리먼트 best-effort 추출
+   * Best-effort get tab header element
+   */
+  getTabHeaderEl(leaf) {
+    const obj = leaf;
+    const el = obj.tabHeaderEl;
+    return el instanceof HTMLElement ? el : null;
+  }
+  /**
+   * panel을 모르는 fallback 상황에서도 "표시"만 적용
+   * Apply preview styling only (when panel identity is unavailable)
+   */
+  applyPreviewStyling(leaf) {
+    if (!this.settings.useItalicTitle)
+      return;
+    const headerEl = this.getTabHeaderEl(leaf);
+    if (!headerEl)
+      return;
+    headerEl.classList.add(PREVIEW_CLASS);
+  }
+  /**
    * preview 표시(패널별로 저장)
    * Mark as preview (per panel)
    *
@@ -538,16 +573,18 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
    */
   markAsPreview(leaf) {
     const panel = this.getPanelParent(leaf);
-    if (!panel)
+    if (!panel) {
+      this.applyPreviewStyling(leaf);
       return;
+    }
     this.previewByPanel.set(panel, leaf);
-    const ext = leaf;
-    if (!ext.tabHeaderEl)
+    const headerEl = this.getTabHeaderEl(leaf);
+    if (!headerEl)
       return;
     if (this.settings.useItalicTitle) {
-      ext.tabHeaderEl.classList.add(PREVIEW_CLASS);
+      headerEl.classList.add(PREVIEW_CLASS);
     } else {
-      ext.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+      headerEl.classList.remove(PREVIEW_CLASS);
     }
   }
   /**
@@ -562,9 +599,9 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
         this.previewByPanel.delete(panel);
       }
     }
-    const ext = leaf;
-    if (ext.tabHeaderEl) {
-      ext.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+    const headerEl = this.getTabHeaderEl(leaf);
+    if (headerEl) {
+      headerEl.classList.remove(PREVIEW_CLASS);
     }
   }
 };

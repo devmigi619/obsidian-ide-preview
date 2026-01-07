@@ -25,9 +25,14 @@ interface ExtendedWorkspace extends Workspace {
 	createLeafInParent(parent: WorkspaceItem, index: number): WorkspaceLeaf;
 }
 
-interface LeafParent {
+/**
+ * LeafParent (panel/tab group)
+ * KR: leaf.parent로 관측되는 패널(탭 그룹) 객체는 WorkspaceItem 형태를 가지며 children 배열을 가집니다.
+ * EN: The panel/tab-group object observed via leaf.parent is a WorkspaceItem with children.
+ */
+type LeafParent = WorkspaceItem & {
 	children: WorkspaceItem[];
-}
+};
 
 interface ExtendedLeaf extends WorkspaceLeaf {
 	/**
@@ -38,7 +43,7 @@ interface ExtendedLeaf extends WorkspaceLeaf {
 	 * tabHeaderEl is the tab header DOM element. It may not exist depending on Obsidian versions/themes.
 	 * This is used only for best-effort styling; core behavior works even if styling is skipped.
 	 */
-	tabHeaderEl: HTMLElement;
+	tabHeaderEl?: HTMLElement;
 
 	/**
 	 * NOTE (KR/EN)
@@ -50,7 +55,7 @@ interface ExtendedLeaf extends WorkspaceLeaf {
 	 * Since there is no official public "panel id" API, we use parent as the panel identity.
 	 * We cleanup on layout changes to avoid stale references.
 	 */
-	parent: LeafParent;
+	parent?: LeafParent;
 }
 
 interface PreviewModeSettings {
@@ -70,6 +75,26 @@ const DEFAULT_SETTINGS: PreviewModeSettings = {
 };
 
 const PREVIEW_CLASS = "is-preview-tab";
+
+/**
+ * Minimal view shape we care about (file path)
+ * KR: leaf.view에서 file.path만 안전하게 읽기 위한 최소 형태
+ * EN: Minimal shape to safely read file.path from a leaf view
+ */
+type FileLikeView = {
+	file?: {
+		path?: unknown;
+	};
+};
+
+/**
+ * Editor-change info shape (optional)
+ * KR: Obsidian 버전에 따라 info.leaf가 제공될 수 있음
+ * EN: Some Obsidian versions provide info.leaf
+ */
+type EditorChangeInfoLike = {
+	leaf?: WorkspaceLeaf;
+};
 
 export default class PreviewModePlugin extends Plugin {
 	settings: PreviewModeSettings;
@@ -130,8 +155,8 @@ export default class PreviewModePlugin extends Plugin {
 				if (!(file instanceof TFile)) return;
 
 				this.app.workspace.iterateAllLeaves((leaf) => {
-					const view = leaf.view as any;
-					if (view?.file?.path !== file.path) return;
+					const openedPath = this.getLeafFilePath(leaf);
+					if (openedPath !== file.path) return;
 
 					if (this.isPanelPreviewLeaf(leaf)) {
 						this.markAsPermanent(leaf);
@@ -143,8 +168,12 @@ export default class PreviewModePlugin extends Plugin {
 		// 편집 시작 시: 해당 패널의 preview였다면 승격 / Promote on editor change
 		this.registerEvent(
 			this.app.workspace.on("editor-change", (_editor, info) => {
-				// Some Obsidian versions provide leaf via info; fallback to active leaf
-				const leafFromInfo = (info as any)?.leaf as WorkspaceLeaf | undefined;
+				const infoObj = info as unknown;
+				const leafFromInfo =
+					typeof infoObj === "object" && infoObj !== null
+						? (infoObj as EditorChangeInfoLike).leaf
+						: undefined;
+
 				const leaf = leafFromInfo ?? this.app.workspace.getLeaf(false);
 
 				if (this.isPanelPreviewLeaf(leaf)) {
@@ -184,7 +213,7 @@ export default class PreviewModePlugin extends Plugin {
 	 * 파일 생성 감지 및 복구 로직 (✅ 이벤트 기반)
 	 * File creation detection & restore (event-driven)
 	 */
-	setupFileCreationHandling() {
+	private setupFileCreationHandling() {
 		// [1] create: 스냅샷 저장 / Snapshot on create
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
@@ -219,7 +248,7 @@ export default class PreviewModePlugin extends Plugin {
 				this.fileCreationState = { newFile: null, hijackedLeaf: null, oldFile: null };
 
 				const currentLeaf = this.app.workspace.getLeaf(false);
-				void this.handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile);
+				this.handleFileCreation(newFile, currentLeaf, hijackedLeaf, oldFile);
 			})
 		);
 	}
@@ -227,7 +256,7 @@ export default class PreviewModePlugin extends Plugin {
 	/**
 	 * 파일 생성 시나리오 처리 / Handle file creation scenarios
 	 */
-	async handleFileCreation(
+	private handleFileCreation(
 		newFile: TFile,
 		currentLeaf: WorkspaceLeaf,
 		hijackedLeaf: WorkspaceLeaf | null,
@@ -291,16 +320,15 @@ export default class PreviewModePlugin extends Plugin {
 	 * Track 2 hardening:
 	 * - Wrap `createLeafInParent` with try/catch to avoid hard failures if internals change.
 	 */
-	async restoreHijackedTab(hijackedLeaf: WorkspaceLeaf, oldFile: TFile) {
-		const extLeaf = hijackedLeaf as ExtendedLeaf;
-		const parent = extLeaf.parent;
+	private async restoreHijackedTab(hijackedLeaf: WorkspaceLeaf, oldFile: TFile) {
+		const parent = this.getPanelParent(hijackedLeaf);
 
 		if (!parent || !parent.children) {
 			this.markAsPermanent(hijackedLeaf);
 			return;
 		}
 
-		const hijackedIndex = parent.children.indexOf(extLeaf as unknown as WorkspaceItem);
+		const hijackedIndex = parent.children.indexOf(hijackedLeaf as unknown as WorkspaceItem);
 		if (hijackedIndex === -1) {
 			this.markAsPermanent(hijackedLeaf);
 			return;
@@ -310,7 +338,7 @@ export default class PreviewModePlugin extends Plugin {
 
 		let restoredLeaf: WorkspaceLeaf | null = null;
 		try {
-			restoredLeaf = workspace.createLeafInParent(parent as any, hijackedIndex);
+			restoredLeaf = workspace.createLeafInParent(parent, hijackedIndex);
 		} catch {
 			restoredLeaf = null;
 		}
@@ -334,7 +362,7 @@ export default class PreviewModePlugin extends Plugin {
 	 * 입력 이벤트: preview에서 편집/제목 수정 등 시작되면 승격
 	 * Input event: promote preview to permanent when editing starts
 	 */
-	handleInput = (evt: Event) => {
+	private handleInput = (evt: Event) => {
 		const target = evt.target as HTMLElement;
 		if (target.closest(".view-header") || target.classList.contains("inline-title")) {
 			const activeLeaf = this.app.workspace.getLeaf(false);
@@ -358,7 +386,7 @@ export default class PreviewModePlugin extends Plugin {
 	 * 싱글클릭: preview로 열기 (✅ 패널별 preview 1개 유지)
 	 * Single click: open as preview (keep 1 preview per panel)
 	 */
-	handleClick = (evt: MouseEvent) => {
+	private handleClick = (evt: MouseEvent) => {
 		const target = evt.target as HTMLElement;
 		if (!this.isFromFileExplorer(target)) return;
 
@@ -382,7 +410,7 @@ export default class PreviewModePlugin extends Plugin {
 	 * 더블클릭: 일반탭으로 열기 (✅ 활성 패널 내부에서만 동작)
 	 * Double click: open as permanent (only within the active panel)
 	 */
-	handleDblClick = (evt: MouseEvent) => {
+	private handleDblClick = (evt: MouseEvent) => {
 		const target = evt.target as HTMLElement;
 		if (!this.isFromFileExplorer(target)) return;
 
@@ -405,14 +433,14 @@ export default class PreviewModePlugin extends Plugin {
 	 * 탭 헤더 더블클릭: 해당 패널의 preview면 승격
 	 * Double click on tab header: promote preview (per panel)
 	 */
-	handleHeaderDblClick = (evt: MouseEvent) => {
+	private handleHeaderDblClick = (evt: MouseEvent) => {
 		const target = evt.target as HTMLElement;
 		const tabHeader = target.closest(".workspace-tab-header");
 		if (!tabHeader) return;
 
 		for (const [, leaf] of this.previewByPanel.entries()) {
-			const ext = leaf as ExtendedLeaf;
-			if (ext.tabHeaderEl === tabHeader) {
+			const headerEl = this.getTabHeaderEl(leaf);
+			if (headerEl && headerEl === tabHeader) {
 				evt.preventDefault();
 				evt.stopPropagation();
 				evt.stopImmediatePropagation();
@@ -425,7 +453,7 @@ export default class PreviewModePlugin extends Plugin {
 	/**
 	 * 파일 열기 로직 / File open logic
 	 *
-	 * Track 2.1 hardening (A):
+	 * Track 2.1 hardening:
 	 * KR:
 	 *  - 클릭 이벤트를 가로채므로(preventDefault), 여기서 "패널 식별 실패"가 나면 무반응이 됩니다.
 	 *  - 따라서 panel을 못 잡아도, 최소한 현재 leaf에라도 파일을 열어 UX를 보장합니다.
@@ -434,7 +462,7 @@ export default class PreviewModePlugin extends Plugin {
 	 *  - Since we intercept clicks (preventDefault), failing to detect a panel would cause "no-op".
 	 *  - If panel identity is unavailable, we still open the file in the active leaf as a fallback.
 	 */
-	async openFileLogic(file: TFile, isDoubleClick: boolean) {
+	private async openFileLogic(file: TFile, isDoubleClick: boolean) {
 		const activeLeaf = this.app.workspace.getLeaf(false);
 		const panel = this.getPanelParent(activeLeaf);
 
@@ -444,10 +472,12 @@ export default class PreviewModePlugin extends Plugin {
 			await activeLeaf.openFile(file);
 			this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
 
-			// Double-click implies permanence; single click implies preview (styling best-effort).
-			if (isDoubleClick) this.markAsPermanent(activeLeaf);
-			else this.markAsPreview(activeLeaf);
-
+			if (isDoubleClick) {
+				this.markAsPermanent(activeLeaf);
+			} else {
+				// panel을 모르면 per-panel 상태 저장은 못하지만, 표시(best-effort)는 적용 가능
+				this.applyPreviewStyling(activeLeaf);
+			}
 			return;
 		}
 
@@ -477,10 +507,9 @@ export default class PreviewModePlugin extends Plugin {
 	 * 더블클릭: 활성 패널 안에서만 "일반탭"으로 열기
 	 * Double click: open as permanent within the active panel
 	 */
-	async handleDoubleClickInPanel(file: TFile, activeLeaf: WorkspaceLeaf) {
+	private async handleDoubleClickInPanel(file: TFile, activeLeaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(activeLeaf);
 		if (!panel) {
-			// Fallback: open in active leaf (avoid no-op)
 			await activeLeaf.openFile(file);
 			this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
 			this.markAsPermanent(activeLeaf);
@@ -489,14 +518,13 @@ export default class PreviewModePlugin extends Plugin {
 
 		// If the preview tab in this panel is already showing the file, promote it
 		const preview = this.getPreviewLeafForPanel(panel);
-		const previewView = preview?.view as any;
-		if (preview && previewView?.file?.path === file.path) {
+		if (preview && this.getLeafFilePath(preview) === file.path) {
 			this.markAsPermanent(preview);
 			this.app.workspace.setActiveLeaf(preview, { focus: true });
 			return;
 		}
 
-		const leaf = await this.createNewTabInSamePanel(activeLeaf);
+		const leaf = this.createNewTabInSamePanel(activeLeaf);
 		await leaf.openFile(file);
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 		this.markAsPermanent(leaf);
@@ -506,13 +534,12 @@ export default class PreviewModePlugin extends Plugin {
 	 * 싱글클릭: 활성 패널 안에서만 preview로 열기 (패널별 preview 1개 유지)
 	 * Single click: open as preview within the active panel (one preview per panel)
 	 */
-	async handleSingleClickInPanel(file: TFile, activeLeaf: WorkspaceLeaf) {
+	private async handleSingleClickInPanel(file: TFile, activeLeaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(activeLeaf);
 		if (!panel) {
-			// Fallback: open in active leaf (avoid no-op)
 			await activeLeaf.openFile(file);
 			this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
-			this.markAsPreview(activeLeaf);
+			this.applyPreviewStyling(activeLeaf);
 			return;
 		}
 
@@ -558,7 +585,7 @@ export default class PreviewModePlugin extends Plugin {
 		}
 
 		// Case D: create new tab in the same panel, use it as preview
-		const newLeaf = await this.createNewTabInSamePanel(activeLeaf);
+		const newLeaf = this.createNewTabInSamePanel(activeLeaf);
 		await newLeaf.openFile(file);
 		this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
 		this.markAsPreview(newLeaf);
@@ -568,7 +595,7 @@ export default class PreviewModePlugin extends Plugin {
 	 * 같은 패널에 새 탭 생성 (가능하면 createLeafInParent 사용)
 	 * Create a new tab in the same panel (best-effort)
 	 */
-	async createNewTabInSamePanel(activeLeaf: WorkspaceLeaf): Promise<WorkspaceLeaf> {
+	private createNewTabInSamePanel(activeLeaf: WorkspaceLeaf): WorkspaceLeaf {
 		const panel = this.getPanelParent(activeLeaf);
 
 		// Fallback if panel identity is unavailable
@@ -576,16 +603,15 @@ export default class PreviewModePlugin extends Plugin {
 			return this.app.workspace.getLeaf("tab");
 		}
 
-		const extActive = activeLeaf as ExtendedLeaf;
-		const parent = extActive.parent;
 		const workspace = this.app.workspace as ExtendedWorkspace;
 
-		const index = this.settings.openNewTabAtEnd
-			? parent.children.length
-			: Math.max(0, parent.children.indexOf(extActive as unknown as WorkspaceItem) + 1);
+		const activeIndex = panel.children.indexOf(activeLeaf as unknown as WorkspaceItem);
+		const nextToActive = Math.max(0, activeIndex + 1);
+
+		const index = this.settings.openNewTabAtEnd ? panel.children.length : nextToActive;
 
 		try {
-			return workspace.createLeafInParent(parent as any, index);
+			return workspace.createLeafInParent(panel, index);
 		} catch {
 			return this.app.workspace.getLeaf("tab");
 		}
@@ -595,12 +621,12 @@ export default class PreviewModePlugin extends Plugin {
 	 * 같은 패널에서 특정 파일이 열린 leaf 찾기
 	 * Find a leaf that already has the file open in the same panel
 	 */
-	findLeafWithFileInPanel(file: TFile, panel: LeafParent): WorkspaceLeaf | null {
+	private findLeafWithFileInPanel(file: TFile, panel: LeafParent): WorkspaceLeaf | null {
 		let result: WorkspaceLeaf | null = null;
 
 		this.app.workspace.iterateAllLeaves((leaf) => {
-			const view = leaf.view as any;
-			if (view?.file?.path !== file.path) return;
+			const openedPath = this.getLeafFilePath(leaf);
+			if (openedPath !== file.path) return;
 
 			const p = this.getPanelParent(leaf);
 			if (p === panel) result = leaf;
@@ -612,17 +638,20 @@ export default class PreviewModePlugin extends Plugin {
 	/**
 	 * 패널 parent 추출 (best-effort)
 	 * Extract panel identity (best-effort)
+	 *
+	 * KR: 공식적인 패널 ID가 없어서 leaf.parent를 사용합니다.
+	 * EN: No official panel id; using leaf.parent as best-effort identity.
 	 */
 	private getPanelParent(leaf: WorkspaceLeaf): LeafParent | null {
-		const p = (leaf as ExtendedLeaf).parent;
-		return p ?? null;
+		const obj = leaf as unknown as Partial<ExtendedLeaf>;
+		return obj.parent ?? null;
 	}
 
 	/**
 	 * 두 leaf가 같은 패널인지
 	 * Check whether two leaves belong to the same panel
 	 */
-	isSamePanel(leaf1: WorkspaceLeaf | null, leaf2: WorkspaceLeaf | null): boolean {
+	private isSamePanel(leaf1: WorkspaceLeaf | null, leaf2: WorkspaceLeaf | null): boolean {
 		if (!leaf1 || !leaf2) return false;
 		const p1 = this.getPanelParent(leaf1);
 		const p2 = this.getPanelParent(leaf2);
@@ -679,6 +708,41 @@ export default class PreviewModePlugin extends Plugin {
 	}
 
 	/**
+	 * leaf.view에서 현재 열린 파일 경로를 안전하게 추출
+	 * Safely extract opened file path from leaf.view
+	 */
+	private getLeafFilePath(leaf: WorkspaceLeaf): string | null {
+		const view = leaf.view as unknown;
+		if (typeof view !== "object" || view === null) return null;
+
+		const v = view as FileLikeView;
+		const path = v.file?.path;
+
+		return typeof path === "string" ? path : null;
+	}
+
+	/**
+	 * 탭 헤더 엘리먼트 best-effort 추출
+	 * Best-effort get tab header element
+	 */
+	private getTabHeaderEl(leaf: WorkspaceLeaf): HTMLElement | null {
+		const obj = leaf as unknown as Partial<ExtendedLeaf>;
+		const el = obj.tabHeaderEl;
+		return el instanceof HTMLElement ? el : null;
+	}
+
+	/**
+	 * panel을 모르는 fallback 상황에서도 "표시"만 적용
+	 * Apply preview styling only (when panel identity is unavailable)
+	 */
+	private applyPreviewStyling(leaf: WorkspaceLeaf) {
+		if (!this.settings.useItalicTitle) return;
+		const headerEl = this.getTabHeaderEl(leaf);
+		if (!headerEl) return;
+		headerEl.classList.add(PREVIEW_CLASS);
+	}
+
+	/**
 	 * preview 표시(패널별로 저장)
 	 * Mark as preview (per panel)
 	 *
@@ -690,19 +754,23 @@ export default class PreviewModePlugin extends Plugin {
 	 *  - If tabHeaderEl is unavailable, we skip styling only.
 	 *  - Even then, previewByPanel state is kept, so preview behavior still works.
 	 */
-	markAsPreview(leaf: WorkspaceLeaf) {
+	private markAsPreview(leaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(leaf);
-		if (!panel) return;
+		if (!panel) {
+			// No panel identity: can't store per-panel state, styling only.
+			this.applyPreviewStyling(leaf);
+			return;
+		}
 
 		this.previewByPanel.set(panel, leaf);
 
-		const ext = leaf as ExtendedLeaf;
-		if (!ext.tabHeaderEl) return;
+		const headerEl = this.getTabHeaderEl(leaf);
+		if (!headerEl) return;
 
 		if (this.settings.useItalicTitle) {
-			ext.tabHeaderEl.classList.add(PREVIEW_CLASS);
+			headerEl.classList.add(PREVIEW_CLASS);
 		} else {
-			ext.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+			headerEl.classList.remove(PREVIEW_CLASS);
 		}
 	}
 
@@ -710,7 +778,7 @@ export default class PreviewModePlugin extends Plugin {
 	 * 일반탭 승격(패널별 preview 해제)
 	 * Promote to permanent (remove per-panel preview mark)
 	 */
-	markAsPermanent(leaf: WorkspaceLeaf) {
+	private markAsPermanent(leaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(leaf);
 		if (panel) {
 			const preview = this.previewByPanel.get(panel);
@@ -719,9 +787,9 @@ export default class PreviewModePlugin extends Plugin {
 			}
 		}
 
-		const ext = leaf as ExtendedLeaf;
-		if (ext.tabHeaderEl) {
-			ext.tabHeaderEl.classList.remove(PREVIEW_CLASS);
+		const headerEl = this.getTabHeaderEl(leaf);
+		if (headerEl) {
+			headerEl.classList.remove(PREVIEW_CLASS);
 		}
 	}
 }

@@ -18,51 +18,18 @@ import {
  *
  * This plugin uses a few workspace internals on a best-effort basis to create/restore tabs
  * inside the active panel (tab group). These are not guaranteed public APIs.
- * If internals change, core behavior should still work, while exact placement/styling may degrade.
  */
 
 interface ExtendedWorkspace extends Workspace {
 	createLeafInParent(parent: WorkspaceItem, index: number): WorkspaceLeaf;
 }
 
-/**
- * LeafParent (panel/tab group)
- * KR: leaf.parent로 관측되는 패널(탭 그룹) 객체는 WorkspaceItem 형태를 가지며 children 배열을 가질 수 있습니다.
- *     단, Obsidian 타입 정의상 leaf.parent는 "탭 그룹" 외 다른 타입일 수도 있으므로,
- *     getPanelParent()에서 children 존재 여부를 검사하여 패널로 인정할지 결정합니다.
- *
- * EN: The panel/tab-group object observed via leaf.parent can be treated as a WorkspaceItem with children.
- *     However, Obsidian's typings allow leaf.parent to be other types as well,
- *     so getPanelParent() validates the presence of children before treating it as a panel.
- */
 type LeafParent = WorkspaceItem & {
 	children: WorkspaceItem[];
 };
 
 interface ExtendedLeaf extends WorkspaceLeaf {
-	/**
-	 * NOTE (KR/EN)
-	 * tabHeaderEl은 탭 헤더 DOM 엘리먼트입니다. 버전/테마에 따라 없을 수 있습니다.
-	 * UI 표시(이탤릭)만을 위한 best-effort 접근이며, 없으면 표시만 생략합니다.
-	 *
-	 * tabHeaderEl is the tab header DOM element. It may not exist depending on Obsidian versions/themes.
-	 * This is used only for best-effort styling; core behavior works even if styling is skipped.
-	 */
 	tabHeaderEl?: HTMLElement;
-
-	/**
-	 * IMPORTANT (KR/EN)
-	 * ⚠️ 여기서는 parent를 다시 선언하지 않습니다.
-	 * (WorkspaceLeaf의 parent는 Obsidian 타입 정의에서 "필수"로 선언되어 있고,
-	 *  상속 인터페이스에서 parent?: 로 바꾸면 타입스크립트가 에러를 냅니다.)
-	 *
-	 * We intentionally do NOT redeclare `parent` here.
-	 * (WorkspaceLeaf declares `parent` as required; redeclaring it as optional causes a TS error.)
-	 *
-	 * 실제 접근은 getPanelParent()에서 unknown 기반으로 안전하게 처리합니다.
-	 * Actual access is handled safely in getPanelParent() using unknown-based narrowing.
-	 */
-	// parent?: LeafParent;
 }
 
 interface PreviewModeSettings {
@@ -83,22 +50,12 @@ const DEFAULT_SETTINGS: PreviewModeSettings = {
 
 const PREVIEW_CLASS = "is-preview-tab";
 
-/**
- * Minimal view shape we care about (file path)
- * KR: leaf.view에서 file.path만 안전하게 읽기 위한 최소 형태
- * EN: Minimal shape to safely read file.path from a leaf view
- */
 type FileLikeView = {
 	file?: {
 		path?: unknown;
 	};
 };
 
-/**
- * Editor-change info shape (optional)
- * KR: Obsidian 버전에 따라 info.leaf가 제공될 수 있음
- * EN: Some Obsidian versions provide info.leaf
- */
 type EditorChangeInfoLike = {
 	leaf?: WorkspaceLeaf;
 };
@@ -106,34 +63,10 @@ type EditorChangeInfoLike = {
 export default class PreviewModePlugin extends Plugin {
 	settings: PreviewModeSettings;
 
-	/**
-	 * ✅ 패널별 preview leaf 관리 / Per-panel preview leaf state
-	 *
-	 * KR:
-	 *  - 패널(탭 그룹)마다 preview 탭을 최대 1개로 유지합니다.
-	 *  - 패널 식별자는 공식 API가 없어 leaf.parent를 best-effort로 사용합니다.
-	 *  - layout-change 시 cleanup으로 stale 상태를 정리합니다.
-	 *
-	 * EN:
-	 *  - Keep at most one preview tab per panel (tab group).
-	 *  - We use leaf.parent as a best-effort panel identity (no official public panel id API).
-	 *  - Cleanup on layout changes to prevent stale state.
-	 */
+	/** 패널별 preview leaf */
 	private previewByPanel = new Map<LeafParent, WorkspaceLeaf>();
 
-	/**
-	 * 파일 생성 "복구"용 상태 / State for file-creation "restore"
-	 *
-	 * KR:
-	 *  - 새 노트 생성 과정에서, 기존 탭이 새 파일로 덮어써지는(하이재킹) 경우가 있습니다.
-	 *  - create 시점에 스냅샷을 저장하고, file-open에서 새 파일이 실제로 열렸을 때만 복구 로직을 실행합니다.
-	 *  - 시간(예: 3초) 기반이 아니라 이벤트(file-open) 기반으로 상태를 소비/폐기합니다.
-	 *
-	 * EN:
-	 *  - During new note creation, an existing tab can be "hijacked" (overwritten) by the new file.
-	 *  - We snapshot on vault 'create', then restore only when workspace 'file-open' confirms the new file is opened.
-	 *  - State is consumed/discarded event-driven (file-open), not time-based.
-	 */
+	/** 파일 생성 복구용 상태 */
 	private fileCreationState: {
 		newFile: TFile | null;
 		hijackedLeaf: WorkspaceLeaf | null;
@@ -144,19 +77,46 @@ export default class PreviewModePlugin extends Plugin {
 		oldFile: null,
 	};
 
+	/** 삭제 후 중복 탭 정리용 상태 */
+	private deleteState: {
+		deletedPath: string | null;
+		affectedLeaves: WorkspaceLeaf[];
+	} = {
+		deletedPath: null,
+		affectedLeaves: [],
+	};
+
+	/**
+	 * ✅ 핵심: 마지막으로 활성화된 "markdown 노트 leaf"를 기억해 둔다
+	 * - 검색/북마크/탐색기 같은 "비-markdown" 뷰에서 클릭해도
+	 *   이 leaf의 패널을 기준으로 파일을 열도록 하기 위함.
+	 */
+	private lastMarkdownLeaf: WorkspaceLeaf | null = null;
+
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new PreviewModeSettingTab(this.app, this));
 
-		// Explorer click interception (capture phase)
+		// "마지막 markdown leaf" 추적
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (!leaf) return;
+				if (this.isMarkdownFileLeaf(leaf)) {
+					this.lastMarkdownLeaf = leaf;
+				}
+			})
+		);
+
+		// Explorer/Bookmarks/Search 등 네비게이션 클릭 가로채기 (capture)
 		this.registerDomEvent(document, "click", this.handleClick, true);
 		this.registerDomEvent(document, "dblclick", this.handleDblClick, true);
 		this.registerDomEvent(document, "dblclick", this.handleHeaderDblClick, true);
 		this.registerDomEvent(document, "input", this.handleInput, true);
 
 		this.setupFileCreationHandling();
+		this.setupDeleteCleanupHandling();
 
-		// 파일 이름 변경 시: 해당 패널의 preview였다면 승격 / Promote preview tab on file rename
+		// 파일 이름 변경 시: 해당 패널의 preview였다면 승격
 		this.registerEvent(
 			this.app.vault.on("rename", (file) => {
 				if (!(file instanceof TFile)) return;
@@ -172,7 +132,7 @@ export default class PreviewModePlugin extends Plugin {
 			})
 		);
 
-		// 편집 시작 시: 해당 패널의 preview였다면 승격 / Promote on editor change
+		// 편집 시작 시: 해당 패널의 preview였다면 승격
 		this.registerEvent(
 			this.app.workspace.on("editor-change", (_editor, info) => {
 				const infoObj = info as unknown;
@@ -189,23 +149,26 @@ export default class PreviewModePlugin extends Plugin {
 			})
 		);
 
-		// 레이아웃 변경 시: 패널별 preview 유효성 정리 / Cleanup preview state on layout change
+		// 레이아웃 변경 시: 패널별 preview 유효성 정리
 		this.registerEvent(
 			this.app.workspace.on("layout-change", () => {
 				this.cleanupPreviewMap();
+				if (this.lastMarkdownLeaf && !this.isLeafStillPresent(this.lastMarkdownLeaf)) {
+					this.lastMarkdownLeaf = null;
+				}
 			})
 		);
 	}
 
 	onunload() {
-		// 표시 클래스 제거 / Remove styling class
 		document.querySelectorAll(`.${PREVIEW_CLASS}`).forEach((el) => {
 			el.classList.remove(PREVIEW_CLASS);
 		});
 
-		// 상태 정리 / Clear state
 		this.previewByPanel.clear();
 		this.fileCreationState = { newFile: null, hijackedLeaf: null, oldFile: null };
+		this.deleteState = { deletedPath: null, affectedLeaves: [] };
+		this.lastMarkdownLeaf = null;
 	}
 
 	async loadSettings() {
@@ -217,11 +180,10 @@ export default class PreviewModePlugin extends Plugin {
 	}
 
 	/**
-	 * 파일 생성 감지 및 복구 로직 (✅ 이벤트 기반)
-	 * File creation detection & restore (event-driven)
+	 * 파일 생성 감지 및 복구 로직 (이벤트 기반)
 	 */
 	private setupFileCreationHandling() {
-		// [1] create: 스냅샷 저장 / Snapshot on create
+		// create: 스냅샷 저장
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
 				if (!(file instanceof TFile) || file.extension !== "md") return;
@@ -238,14 +200,12 @@ export default class PreviewModePlugin extends Plugin {
 			})
 		);
 
-		// [2] file-open: 다음 이벤트에서만 처리/폐기 / Consume or discard on next file-open
+		// file-open: 다음 이벤트에서만 처리/폐기
 		this.registerEvent(
 			this.app.workspace.on("file-open", (file) => {
 				const state = this.fileCreationState;
 				if (!state.newFile) return;
 
-				// create 이후 첫 file-open이 다른 파일이면: create-flow 폐기
-				// Discard create-flow if next file-open doesn't match the created file
 				if (!file || file.path !== state.newFile.path) {
 					this.fileCreationState = { newFile: null, hijackedLeaf: null, oldFile: null };
 					return;
@@ -261,33 +221,167 @@ export default class PreviewModePlugin extends Plugin {
 	}
 
 	/**
-	 * 파일 생성 시나리오 처리 / Handle file creation scenarios
+	 * 삭제 후 중복 탭/유령 탭 정리 (1번 문제 해결 로직)
 	 */
+	private setupDeleteCleanupHandling() {
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				if (!(file instanceof TFile)) return;
+
+				const affected: WorkspaceLeaf[] = [];
+				this.app.workspace.iterateAllLeaves((leaf) => {
+					const openedPath = this.getLeafFilePath(leaf);
+					if (openedPath === file.path) affected.push(leaf);
+				});
+
+				this.deleteState = { deletedPath: file.path, affectedLeaves: affected };
+
+				setTimeout(() => {
+					requestAnimationFrame(() => {
+						requestAnimationFrame(() => {
+							void this.cleanupAfterDelete();
+						});
+					});
+				}, 0);
+			})
+		);
+	}
+
+	private async cleanupAfterDelete() {
+		const { deletedPath, affectedLeaves } = this.deleteState;
+		this.deleteState = { deletedPath: null, affectedLeaves: [] };
+		if (!deletedPath) return;
+
+		for (const leaf of affectedLeaves) {
+			if (!this.isLeafStillPresent(leaf)) continue;
+
+			const nowPath = this.getLeafFilePath(leaf);
+
+			if (!nowPath || nowPath === deletedPath) {
+				await this.setLeafEmptyBestEffort(leaf);
+				continue;
+			}
+
+			const panel = this.getPanelParent(leaf);
+			if (!panel) continue;
+
+			const nowFile = this.app.vault.getAbstractFileByPath(nowPath);
+			if (!(nowFile instanceof TFile)) continue;
+
+			const other = this.findOtherLeafWithFileInPanel(nowFile, panel, leaf);
+			if (!other) continue;
+
+			await this.closeLeafBestEffort(leaf);
+			this.app.workspace.setActiveLeaf(other, { focus: true });
+		}
+	}
+
+	private async closeLeafBestEffort(leaf: WorkspaceLeaf) {
+		const anyLeaf = leaf as any;
+
+		if (typeof anyLeaf.detach === "function") {
+			try {
+				anyLeaf.detach();
+				return;
+			} catch {
+				// ignore
+			}
+		}
+
+		await this.setLeafEmptyBestEffort(leaf);
+	}
+
+	private async setLeafEmptyBestEffort(leaf: WorkspaceLeaf) {
+		try {
+			const anyLeaf = leaf as any;
+			if (typeof anyLeaf.setViewState === "function") {
+				await anyLeaf.setViewState({ type: "empty", active: false });
+			}
+		} catch {
+			// ignore
+		}
+	}
+
+	/**
+	 * Best-effort: inline title focus & select
+	 */
+	private focusInlineTitleAndSelect(leaf: WorkspaceLeaf): boolean {
+		const viewAny = leaf.view as any;
+		const container: HTMLElement | undefined = viewAny?.containerEl;
+		if (!(container instanceof HTMLElement)) return false;
+
+		const titleEl = container.querySelector(".inline-title") as HTMLElement | null;
+		if (!titleEl) return false;
+
+		titleEl.focus();
+
+		try {
+			const sel = window.getSelection();
+			if (!sel) return true;
+
+			const range = document.createRange();
+			range.selectNodeContents(titleEl);
+			sel.removeAllRanges();
+			sel.addRange(range);
+		} catch {
+			// ignore
+		}
+
+		return true;
+	}
+
+	private focusEditorBestEffort(leaf: WorkspaceLeaf) {
+		const viewAny = leaf.view as any;
+
+		try {
+			if (viewAny?.editor?.focus) {
+				viewAny.editor.focus();
+				return;
+			}
+		} catch {}
+
+		try {
+			const container: HTMLElement | undefined = viewAny?.containerEl;
+			if (container instanceof HTMLElement) container.focus();
+		} catch {}
+	}
+
+	private ensureTitleEditAfterCreate(targetLeaf: WorkspaceLeaf, createdFile: TFile) {
+		const openedPath = this.getLeafFilePath(targetLeaf);
+		if (openedPath !== createdFile.path) return;
+
+		setTimeout(() => {
+			requestAnimationFrame(() => {
+				this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+				this.app.commands.executeCommandById("rename-current-file");
+
+				requestAnimationFrame(() => {
+					const ok = this.focusInlineTitleAndSelect(targetLeaf);
+					if (!ok) this.focusEditorBestEffort(targetLeaf);
+
+					requestAnimationFrame(() => {
+						const ok2 = this.focusInlineTitleAndSelect(targetLeaf);
+						if (!ok2) this.focusEditorBestEffort(targetLeaf);
+					});
+				});
+			});
+		}, 0);
+	}
+
 	private handleFileCreation(
 		newFile: TFile,
 		currentLeaf: WorkspaceLeaf,
 		hijackedLeaf: WorkspaceLeaf | null,
 		oldFile: TFile | null
 	) {
-		// If the newly created file opened in a different leaf than the "active leaf at create time",
-		// treat it as "opened in a new tab".
 		const hijackedSame = hijackedLeaf ? currentLeaf === hijackedLeaf : false;
 
-		// Case 1: 새 탭에 열림 / Opened in a new tab
+		// Case 1: 새 탭에 열림
 		if (!hijackedSame) {
-			/**
-			 * NOTE (KR/EN)
-			 * setTimeout(..., 0)은 "시간으로 제어"가 아니라,
-			 * Obsidian이 leaf/탭 상태를 갱신한 뒤 다음 tick에서 안전하게 처리하기 위한 큐잉입니다.
-			 *
-			 * setTimeout(..., 0) here is not time-based control. It's used to queue work
-			 * after Obsidian finishes updating leaf/tab state for the current event cycle.
-			 */
 			setTimeout(() => {
 				this.markAsPermanent(currentLeaf);
+				this.ensureTitleEditAfterCreate(currentLeaf, newFile);
 
-				// 같은 패널에 preview가 있었다면 옵션에 따라 승격 (패널별)
-				// Promote existing preview in the same panel if the option is enabled (per-panel)
 				const panel = this.getPanelParent(currentLeaf);
 				if (!panel) return;
 
@@ -304,40 +398,38 @@ export default class PreviewModePlugin extends Plugin {
 			return;
 		}
 
-		// Case 2: 탭 덮어쓰기 발생 / Tab hijacking occurred
-
-		// Case 2-1: 복구할 파일이 없음 (빈 탭이었거나 같은 파일)
-		// No file to restore (empty tab or same file)
+		// Case 2-1: 복구할 파일이 없음
 		if (!oldFile || oldFile.path === newFile.path) {
 			setTimeout(() => {
 				this.markAsPermanent(currentLeaf);
+				this.ensureTitleEditAfterCreate(currentLeaf, newFile);
 			}, 0);
 			return;
 		}
 
-		// Case 2-2: 복구 필요 / Restoration needed
+		// Case 2-2: 복구 필요
 		setTimeout(() => {
-			void this.restoreHijackedTab(currentLeaf, oldFile);
+			void this.restoreHijackedTab(currentLeaf, oldFile, newFile);
 		}, 0);
 	}
 
-	/**
-	 * 덮어씌워진 탭 복구 / Restore hijacked tab
-	 *
-	 * Track 2 hardening:
-	 * - Wrap `createLeafInParent` with try/catch to avoid hard failures if internals change.
-	 */
-	private async restoreHijackedTab(hijackedLeaf: WorkspaceLeaf, oldFile: TFile) {
+	private async restoreHijackedTab(
+		hijackedLeaf: WorkspaceLeaf,
+		oldFile: TFile,
+		newFile: TFile
+	) {
 		const parent = this.getPanelParent(hijackedLeaf);
 
 		if (!parent || !parent.children) {
 			this.markAsPermanent(hijackedLeaf);
+			this.ensureTitleEditAfterCreate(hijackedLeaf, newFile);
 			return;
 		}
 
 		const hijackedIndex = parent.children.indexOf(hijackedLeaf as unknown as WorkspaceItem);
 		if (hijackedIndex === -1) {
 			this.markAsPermanent(hijackedLeaf);
+			this.ensureTitleEditAfterCreate(hijackedLeaf, newFile);
 			return;
 		}
 
@@ -354,21 +446,17 @@ export default class PreviewModePlugin extends Plugin {
 			await restoredLeaf.openFile(oldFile);
 			this.markAsPermanent(restoredLeaf);
 		} else {
-			// Fallback: location may differ, but prevents losing the old file view.
 			const fallbackLeaf = this.app.workspace.getLeaf("tab");
 			await fallbackLeaf.openFile(oldFile);
 			this.markAsPermanent(fallbackLeaf);
 		}
 
-		// Step 2: 새 파일 탭(하이재킹된 탭)은 일반탭 처리 / New file tab should be permanent
 		this.app.workspace.setActiveLeaf(hijackedLeaf, { focus: true });
 		this.markAsPermanent(hijackedLeaf);
+
+		this.ensureTitleEditAfterCreate(hijackedLeaf, newFile);
 	}
 
-	/**
-	 * 입력 이벤트: preview에서 편집/제목 수정 등 시작되면 승격
-	 * Input event: promote preview to permanent when editing starts
-	 */
 	private handleInput = (evt: Event) => {
 		const target = evt.target as HTMLElement;
 		if (target.closest(".view-header") || target.classList.contains("inline-title")) {
@@ -380,66 +468,190 @@ export default class PreviewModePlugin extends Plugin {
 	};
 
 	/**
-	 * 클릭이 파일 탐색기에서 왔는지 좁게 추정 / Narrow scope to File Explorer
+	 * ✅ “이 leaf가 markdown 노트(FileView markdown)인가?”
 	 */
-	private isFromFileExplorer(target: HTMLElement): boolean {
-		return (
-			!!target.closest('.workspace-leaf-content[data-type="file-explorer"]') ||
-			!!target.closest(".nav-files-container")
-		);
-	};
+	private isMarkdownFileLeaf(leaf: WorkspaceLeaf): boolean {
+		const view = leaf.view;
+		if (!(view instanceof FileView)) return false;
+		// markdown 파일 뷰는 보통 view.getViewType() === "markdown"
+		return view.getViewType() === "markdown";
+	}
 
 	/**
-	 * 싱글클릭: preview로 열기 (✅ 패널별 preview 1개 유지)
-	 * Single click: open as preview (keep 1 preview per panel)
+	 * ✅ 네비게이션(검색/북마크/탐색기 등)에서 클릭했을 때,
+	 * “열기를 적용할 기준 leaf(패널)”을 결정한다.
+	 *
+	 * - 클릭이 markdown leaf 내부라면: 현재 활성 leaf 사용
+	 * - 클릭이 비-markdown leaf(검색/북마크/탐색기 등)라면:
+	 *   마지막 markdown leaf를 우선 사용 (없으면 active leaf fallback)
 	 */
+	private getBaseLeafForOpen(clickTarget: HTMLElement): WorkspaceLeaf {
+		const leafContent = clickTarget.closest<HTMLElement>(".workspace-leaf-content");
+		const leafType = leafContent?.getAttribute("data-type") ?? null;
+
+		// markdown leaf에서 발생한 클릭(우리는 보통 isSafeNavArea에서 막지만, 안전하게)
+		if (leafType === "markdown") {
+			return this.app.workspace.getLeaf(false);
+		}
+
+		// 비-markdown 뷰(탐색기/북마크/검색/그래프 등): 마지막 markdown 패널을 기준으로
+		if (this.lastMarkdownLeaf && this.isLeafStillPresent(this.lastMarkdownLeaf)) {
+			return this.lastMarkdownLeaf;
+		}
+
+		// fallback
+		return this.app.workspace.getLeaf(false);
+	}
+
+	private resolveToFile(candidate: string | null): TFile | null {
+		if (!candidate) return null;
+
+		const byPath = this.app.vault.getAbstractFileByPath(candidate);
+		if (byPath instanceof TFile) return byPath;
+
+		const byLink = this.app.metadataCache.getFirstLinkpathDest(candidate, "");
+		if (byLink instanceof TFile) return byLink;
+
+		return null;
+	}
+
+	/**
+	 * Search 결과의 title 텍스트가 "Mumbler1"처럼 붙는 경우가 있어서,
+	 * - 원문
+	 * - 숫자 꼬리 제거본
+	 * 두 후보로 resolve 시도.
+	 */
+	private getSearchTitleCandidates(titleEl: HTMLElement): string[] {
+		const raw = (titleEl.textContent ?? "").trim();
+		if (!raw) return [];
+
+		const stripped = raw.replace(/\s*\d+\s*$/, "").trim();
+
+		const out: string[] = [];
+		out.push(raw);
+		if (stripped && stripped !== raw) out.push(stripped);
+
+		return Array.from(new Set(out));
+	}
+
+	private resolveAny(candidates: string[]): TFile | null {
+		for (const c of candidates) {
+			const f = this.resolveToFile(c);
+			if (f) return f;
+		}
+		return null;
+	}
+
+	/**
+	 * 클릭된 DOM에서 파일을 최대한 일반적으로 추출
+	 * - data-path / data-href / a[href] / obsidian://open
+	 * - search 뷰는 구조상 속성이 없으므로 “결과 블록의 title 텍스트”로 resolve
+	 */
+	private extractFileFromClick(target: HTMLElement): TFile | null {
+		// A) data-path
+		const byPath = target.closest<HTMLElement>("[data-path]");
+		const dataPath = byPath?.getAttribute("data-path") ?? null;
+		{
+			const f = this.resolveToFile(dataPath);
+			if (f) return f;
+		}
+
+		// B) data-href
+		const byHref = target.closest<HTMLElement>("[data-href]");
+		const dataHref = byHref?.getAttribute("data-href") ?? null;
+		{
+			const f = this.resolveToFile(dataHref);
+			if (f) return f;
+		}
+
+		// C) anchor href
+		const a = target.closest<HTMLAnchorElement>("a[href]");
+		const href = a?.getAttribute("href") ?? null;
+		if (href) {
+			if (href.startsWith("obsidian://open")) {
+				try {
+					const url = new URL(href);
+					const p = url.searchParams.get("path");
+					if (p) {
+						const decoded = decodeURIComponent(p);
+						const f = this.resolveToFile(decoded);
+						if (f) return f;
+					}
+				} catch {
+					// ignore
+				}
+			}
+
+			const f = this.resolveToFile(href);
+			if (f) return f;
+		}
+
+		// D) Search leaf fallback: 제목 클릭/매칭 라인 클릭 모두 “.search-result” 기준으로 처리
+		const leafContent = target.closest<HTMLElement>(".workspace-leaf-content");
+		const leafType = leafContent?.getAttribute("data-type") ?? null;
+
+		if (leafType === "search") {
+			const searchResult = target.closest<HTMLElement>(".search-result");
+			const titleEl =
+				searchResult?.querySelector<HTMLElement>(".search-result-file-title") ??
+				target.closest<HTMLElement>(".search-result-file-title");
+
+			if (titleEl) {
+				const candidates = this.getSearchTitleCandidates(titleEl);
+				const f = this.resolveAny(candidates);
+				if (f) return f;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * 안전 영역 판단
+	 * - markdown 편집/프리뷰 내부는 건드리지 않는다
+	 */
+	private isSafeNavArea(target: HTMLElement): boolean {
+		const leafContent = target.closest<HTMLElement>(".workspace-leaf-content");
+		if (!leafContent) return false;
+
+		// do not intercept actual note editor/preview
+		if (target.closest(".markdown-preview-view")) return false;
+		if (target.closest(".cm-editor")) return false;
+
+		return true;
+	}
+
 	private handleClick = (evt: MouseEvent) => {
 		const target = evt.target as HTMLElement;
-		if (!this.isFromFileExplorer(target)) return;
-
-		const titleEl = target.closest(".nav-file-title");
-		if (!titleEl) return;
 		if (evt.ctrlKey || evt.metaKey || evt.shiftKey) return;
+		if (!this.isSafeNavArea(target)) return;
 
-		const path = titleEl.getAttribute("data-path");
-		if (!path) return;
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!(file instanceof TFile)) return;
+		const file = this.extractFileFromClick(target);
+		if (!file) return;
 
 		evt.preventDefault();
 		evt.stopPropagation();
 		evt.stopImmediatePropagation();
 
-		void this.openFileLogic(file, false);
+		const baseLeaf = this.getBaseLeafForOpen(target);
+		void this.openFileLogic(file, false, baseLeaf);
 	};
 
-	/**
-	 * 더블클릭: 일반탭으로 열기 (✅ 활성 패널 내부에서만 동작)
-	 * Double click: open as permanent (only within the active panel)
-	 */
 	private handleDblClick = (evt: MouseEvent) => {
 		const target = evt.target as HTMLElement;
-		if (!this.isFromFileExplorer(target)) return;
+		if (!this.isSafeNavArea(target)) return;
 
-		const titleEl = target.closest(".nav-file-title");
-		if (!titleEl) return;
-
-		const path = titleEl.getAttribute("data-path");
-		if (!path) return;
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!(file instanceof TFile)) return;
+		const file = this.extractFileFromClick(target);
+		if (!file) return;
 
 		evt.preventDefault();
 		evt.stopPropagation();
 		evt.stopImmediatePropagation();
 
-		void this.openFileLogic(file, true);
+		const baseLeaf = this.getBaseLeafForOpen(target);
+		void this.openFileLogic(file, true, baseLeaf);
 	};
 
-	/**
-	 * 탭 헤더 더블클릭: 해당 패널의 preview면 승격
-	 * Double click on tab header: promote preview (per panel)
-	 */
 	private handleHeaderDblClick = (evt: MouseEvent) => {
 		const target = evt.target as HTMLElement;
 		const tabHeader = target.closest(".workspace-tab-header");
@@ -458,23 +670,13 @@ export default class PreviewModePlugin extends Plugin {
 	};
 
 	/**
-	 * 파일 열기 로직 / File open logic
-	 *
-	 * Track 2.1 hardening:
-	 * KR:
-	 *  - 클릭 이벤트를 가로채므로(preventDefault), 여기서 "패널 식별 실패"가 나면 무반응이 됩니다.
-	 *  - 따라서 panel을 못 잡아도, 최소한 현재 leaf에라도 파일을 열어 UX를 보장합니다.
-	 *
-	 * EN:
-	 *  - Since we intercept clicks (preventDefault), failing to detect a panel would cause "no-op".
-	 *  - If panel identity is unavailable, we still open the file in the active leaf as a fallback.
+	 * ✅ baseLeaf를 명시적으로 받아서 “어느 패널 기준으로 열지”를 고정한다.
+	 * - 검색/북마크/탐색기 클릭에서 의도대로 동작하게 만드는 핵심 수정점.
 	 */
-	private async openFileLogic(file: TFile, isDoubleClick: boolean) {
-		const activeLeaf = this.app.workspace.getLeaf(false);
+	private async openFileLogic(file: TFile, isDoubleClick: boolean, baseLeaf: WorkspaceLeaf) {
+		const activeLeaf = baseLeaf;
 		const panel = this.getPanelParent(activeLeaf);
 
-		// ✅ Fallback: panel을 못 잡아도 "무반응"은 절대 나오면 안 됨
-		// If panel cannot be determined, still open the file in the active leaf.
 		if (!panel) {
 			await activeLeaf.openFile(file);
 			this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
@@ -482,19 +684,16 @@ export default class PreviewModePlugin extends Plugin {
 			if (isDoubleClick) {
 				this.markAsPermanent(activeLeaf);
 			} else {
-				// panel을 모르면 per-panel 상태 저장은 못하지만, 표시(best-effort)는 적용 가능
 				this.applyPreviewStyling(activeLeaf);
 			}
 			return;
 		}
 
-		// (옵션) 같은 패널에서만 중복 탭 포커스 / Focus existing only in the same panel
 		if (this.settings.jumpToDuplicate) {
 			const existingLeaf = this.findLeafWithFileInPanel(file, panel);
 			if (existingLeaf) {
 				this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
 
-				// Double-click implies permanence: promote if it is a preview leaf
 				if (isDoubleClick && this.isPanelPreviewLeaf(existingLeaf)) {
 					this.markAsPermanent(existingLeaf);
 				}
@@ -510,10 +709,6 @@ export default class PreviewModePlugin extends Plugin {
 		await this.handleSingleClickInPanel(file, activeLeaf);
 	}
 
-	/**
-	 * 더블클릭: 활성 패널 안에서만 "일반탭"으로 열기
-	 * Double click: open as permanent within the active panel
-	 */
 	private async handleDoubleClickInPanel(file: TFile, activeLeaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(activeLeaf);
 		if (!panel) {
@@ -523,7 +718,6 @@ export default class PreviewModePlugin extends Plugin {
 			return;
 		}
 
-		// If the preview tab in this panel is already showing the file, promote it
 		const preview = this.getPreviewLeafForPanel(panel);
 		if (preview && this.getLeafFilePath(preview) === file.path) {
 			this.markAsPermanent(preview);
@@ -537,10 +731,6 @@ export default class PreviewModePlugin extends Plugin {
 		this.markAsPermanent(leaf);
 	}
 
-	/**
-	 * 싱글클릭: 활성 패널 안에서만 preview로 열기 (패널별 preview 1개 유지)
-	 * Single click: open as preview within the active panel (one preview per panel)
-	 */
 	private async handleSingleClickInPanel(file: TFile, activeLeaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(activeLeaf);
 		if (!panel) {
@@ -564,7 +754,7 @@ export default class PreviewModePlugin extends Plugin {
 			return;
 		}
 
-		// Case B: reuse empty tab (option)
+		// Case B: reuse empty tab
 		if (canReuseEmpty) {
 			if (previewValid && preview && preview !== activeLeaf) {
 				if (this.settings.promoteOldPreview) {
@@ -598,14 +788,9 @@ export default class PreviewModePlugin extends Plugin {
 		this.markAsPreview(newLeaf);
 	}
 
-	/**
-	 * 같은 패널에 새 탭 생성 (가능하면 createLeafInParent 사용)
-	 * Create a new tab in the same panel (best-effort)
-	 */
 	private createNewTabInSamePanel(activeLeaf: WorkspaceLeaf): WorkspaceLeaf {
 		const panel = this.getPanelParent(activeLeaf);
 
-		// Fallback if panel identity is unavailable
 		if (!panel || !panel.children) {
 			return this.app.workspace.getLeaf("tab");
 		}
@@ -624,14 +809,11 @@ export default class PreviewModePlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * 같은 패널에서 특정 파일이 열린 leaf 찾기
-	 * Find a leaf that already has the file open in the same panel
-	 */
 	private findLeafWithFileInPanel(file: TFile, panel: LeafParent): WorkspaceLeaf | null {
 		let result: WorkspaceLeaf | null = null;
 
 		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (result) return;
 			const openedPath = this.getLeafFilePath(leaf);
 			if (openedPath !== file.path) return;
 
@@ -642,18 +824,27 @@ export default class PreviewModePlugin extends Plugin {
 		return result;
 	}
 
-	/**
-	 * 패널 parent 추출 (best-effort)
-	 * Extract panel identity (best-effort)
-	 *
-	 * KR:
-	 *  - Obsidian 타입 정의상 leaf.parent는 "탭 그룹" 외 다른 타입(예: 모바일 drawer)일 수 있습니다.
-	 *  - 그래서 "children 배열이 있는지" 검사해서, 있을 때만 패널(탭 그룹)로 인정합니다.
-	 *
-	 * EN:
-	 *  - Obsidian typings allow leaf.parent to be non-tab-group types (e.g., mobile drawer).
-	 *  - We validate "children array exists" and only then treat it as a panel/tab group.
-	 */
+	private findOtherLeafWithFileInPanel(
+		file: TFile,
+		panel: LeafParent,
+		excludeLeaf: WorkspaceLeaf
+	): WorkspaceLeaf | null {
+		let result: WorkspaceLeaf | null = null;
+
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (result) return;
+			if (leaf === excludeLeaf) return;
+
+			const openedPath = this.getLeafFilePath(leaf);
+			if (openedPath !== file.path) return;
+
+			const p = this.getPanelParent(leaf);
+			if (p === panel) result = leaf;
+		});
+
+		return result;
+	}
+
 	private getPanelParent(leaf: WorkspaceLeaf): LeafParent | null {
 		const obj = leaf as unknown as { parent?: unknown };
 		const parent = obj.parent;
@@ -666,10 +857,6 @@ export default class PreviewModePlugin extends Plugin {
 		return parent as LeafParent;
 	}
 
-	/**
-	 * 두 leaf가 같은 패널인지
-	 * Check whether two leaves belong to the same panel
-	 */
 	private isSamePanel(leaf1: WorkspaceLeaf | null, leaf2: WorkspaceLeaf | null): boolean {
 		if (!leaf1 || !leaf2) return false;
 		const p1 = this.getPanelParent(leaf1);
@@ -677,10 +864,6 @@ export default class PreviewModePlugin extends Plugin {
 		return !!p1 && p1 === p2;
 	}
 
-	/**
-	 * 해당 패널의 preview leaf 가져오기(유효성 포함)
-	 * Get preview leaf for a panel (with validity checks)
-	 */
 	private getPreviewLeafForPanel(panel: LeafParent): WorkspaceLeaf | null {
 		const leaf = this.previewByPanel.get(panel) ?? null;
 		if (!leaf) return null;
@@ -691,10 +874,6 @@ export default class PreviewModePlugin extends Plugin {
 		return leaf;
 	}
 
-	/**
-	 * leaf가 "자기 패널의 preview"인지 확인
-	 * Check if the leaf is the preview leaf for its panel
-	 */
 	private isPanelPreviewLeaf(leaf: WorkspaceLeaf): boolean {
 		const panel = this.getPanelParent(leaf);
 		if (!panel) return false;
@@ -702,10 +881,6 @@ export default class PreviewModePlugin extends Plugin {
 		return preview === leaf;
 	}
 
-	/**
-	 * layout-change 등에서 previewByPanel 정리
-	 * Cleanup preview map on layout changes
-	 */
 	private cleanupPreviewMap() {
 		for (const [panel, leaf] of this.previewByPanel.entries()) {
 			if (!leaf || !this.isLeafStillPresent(leaf)) {
@@ -714,10 +889,6 @@ export default class PreviewModePlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * 공식 API 기반으로 "leaf가 워크스페이스에 아직 존재하는지" 확인
-	 * Check whether a leaf is still present in the workspace (public iteration)
-	 */
 	private isLeafStillPresent(leaf: WorkspaceLeaf): boolean {
 		let present = false;
 		this.app.workspace.iterateAllLeaves((l) => {
@@ -726,10 +897,6 @@ export default class PreviewModePlugin extends Plugin {
 		return present;
 	}
 
-	/**
-	 * leaf.view에서 현재 열린 파일 경로를 안전하게 추출
-	 * Safely extract opened file path from leaf.view
-	 */
 	private getLeafFilePath(leaf: WorkspaceLeaf): string | null {
 		const view = leaf.view as unknown;
 		if (typeof view !== "object" || view === null) return null;
@@ -740,20 +907,12 @@ export default class PreviewModePlugin extends Plugin {
 		return typeof path === "string" ? path : null;
 	}
 
-	/**
-	 * 탭 헤더 엘리먼트 best-effort 추출
-	 * Best-effort get tab header element
-	 */
 	private getTabHeaderEl(leaf: WorkspaceLeaf): HTMLElement | null {
 		const obj = leaf as unknown as Partial<ExtendedLeaf>;
 		const el = obj.tabHeaderEl;
 		return el instanceof HTMLElement ? el : null;
 	}
 
-	/**
-	 * panel을 모르는 fallback 상황에서도 "표시"만 적용
-	 * Apply preview styling only (when panel identity is unavailable)
-	 */
 	private applyPreviewStyling(leaf: WorkspaceLeaf) {
 		if (!this.settings.useItalicTitle) return;
 		const headerEl = this.getTabHeaderEl(leaf);
@@ -761,22 +920,9 @@ export default class PreviewModePlugin extends Plugin {
 		headerEl.classList.add(PREVIEW_CLASS);
 	}
 
-	/**
-	 * preview 표시(패널별로 저장)
-	 * Mark as preview (per panel)
-	 *
-	 * KR:
-	 *  - tabHeaderEl이 없으면 스타일링만 스킵합니다.
-	 *  - 이 경우에도 previewByPanel 상태는 유지되어 "임시탭 동작"은 계속됩니다.
-	 *
-	 * EN:
-	 *  - If tabHeaderEl is unavailable, we skip styling only.
-	 *  - Even then, previewByPanel state is kept, so preview behavior still works.
-	 */
 	private markAsPreview(leaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(leaf);
 		if (!panel) {
-			// No panel identity: can't store per-panel state, styling only.
 			this.applyPreviewStyling(leaf);
 			return;
 		}
@@ -793,10 +939,6 @@ export default class PreviewModePlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * 일반탭 승격(패널별 preview 해제)
-	 * Promote to permanent (remove per-panel preview mark)
-	 */
 	private markAsPermanent(leaf: WorkspaceLeaf) {
 		const panel = this.getPanelParent(leaf);
 		if (panel) {

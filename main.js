@@ -457,13 +457,23 @@ var PreviewModePlugin = class extends import_obsidian.Plugin {
    * 패널 parent 추출 (best-effort)
    * Extract panel identity (best-effort)
    *
-   * KR: 공식적인 패널 ID가 없어서 leaf.parent를 사용합니다.
-   * EN: No official panel id; using leaf.parent as best-effort identity.
+   * KR:
+   *  - Obsidian 타입 정의상 leaf.parent는 "탭 그룹" 외 다른 타입(예: 모바일 drawer)일 수 있습니다.
+   *  - 그래서 "children 배열이 있는지" 검사해서, 있을 때만 패널(탭 그룹)로 인정합니다.
+   *
+   * EN:
+   *  - Obsidian typings allow leaf.parent to be non-tab-group types (e.g., mobile drawer).
+   *  - We validate "children array exists" and only then treat it as a panel/tab group.
    */
   getPanelParent(leaf) {
-    var _a;
     const obj = leaf;
-    return (_a = obj.parent) != null ? _a : null;
+    const parent = obj.parent;
+    if (typeof parent !== "object" || parent === null)
+      return null;
+    const maybe = parent;
+    if (!Array.isArray(maybe.children))
+      return null;
+    return parent;
   }
   /**
    * 두 leaf가 같은 패널인지

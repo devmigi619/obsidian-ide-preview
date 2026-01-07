@@ -27,8 +27,13 @@ interface ExtendedWorkspace extends Workspace {
 
 /**
  * LeafParent (panel/tab group)
- * KR: leaf.parent로 관측되는 패널(탭 그룹) 객체는 WorkspaceItem 형태를 가지며 children 배열을 가집니다.
- * EN: The panel/tab-group object observed via leaf.parent is a WorkspaceItem with children.
+ * KR: leaf.parent로 관측되는 패널(탭 그룹) 객체는 WorkspaceItem 형태를 가지며 children 배열을 가질 수 있습니다.
+ *     단, Obsidian 타입 정의상 leaf.parent는 "탭 그룹" 외 다른 타입일 수도 있으므로,
+ *     getPanelParent()에서 children 존재 여부를 검사하여 패널로 인정할지 결정합니다.
+ *
+ * EN: The panel/tab-group object observed via leaf.parent can be treated as a WorkspaceItem with children.
+ *     However, Obsidian's typings allow leaf.parent to be other types as well,
+ *     so getPanelParent() validates the presence of children before treating it as a panel.
  */
 type LeafParent = WorkspaceItem & {
 	children: WorkspaceItem[];
@@ -46,16 +51,18 @@ interface ExtendedLeaf extends WorkspaceLeaf {
 	tabHeaderEl?: HTMLElement;
 
 	/**
-	 * NOTE (KR/EN)
-	 * leaf.parent는 현재 leaf가 속한 "탭 컨테이너(패널/탭 그룹)" 객체로 관측됩니다.
-	 * Obsidian은 공식적인 "패널 ID" API를 제공하지 않으므로, 패널 식별자로 parent를 사용합니다.
-	 * layout-change 시점에 map을 정리(cleanup)하여 stale 참조를 방지합니다.
+	 * IMPORTANT (KR/EN)
+	 * ⚠️ 여기서는 parent를 다시 선언하지 않습니다.
+	 * (WorkspaceLeaf의 parent는 Obsidian 타입 정의에서 "필수"로 선언되어 있고,
+	 *  상속 인터페이스에서 parent?: 로 바꾸면 타입스크립트가 에러를 냅니다.)
 	 *
-	 * leaf.parent is observed to represent the tab container (panel/tab group) for a leaf.
-	 * Since there is no official public "panel id" API, we use parent as the panel identity.
-	 * We cleanup on layout changes to avoid stale references.
+	 * We intentionally do NOT redeclare `parent` here.
+	 * (WorkspaceLeaf declares `parent` as required; redeclaring it as optional causes a TS error.)
+	 *
+	 * 실제 접근은 getPanelParent()에서 unknown 기반으로 안전하게 처리합니다.
+	 * Actual access is handled safely in getPanelParent() using unknown-based narrowing.
 	 */
-	parent?: LeafParent;
+	// parent?: LeafParent;
 }
 
 interface PreviewModeSettings {
@@ -380,7 +387,7 @@ export default class PreviewModePlugin extends Plugin {
 			!!target.closest('.workspace-leaf-content[data-type="file-explorer"]') ||
 			!!target.closest(".nav-files-container")
 		);
-	}
+	};
 
 	/**
 	 * 싱글클릭: preview로 열기 (✅ 패널별 preview 1개 유지)
@@ -639,12 +646,24 @@ export default class PreviewModePlugin extends Plugin {
 	 * 패널 parent 추출 (best-effort)
 	 * Extract panel identity (best-effort)
 	 *
-	 * KR: 공식적인 패널 ID가 없어서 leaf.parent를 사용합니다.
-	 * EN: No official panel id; using leaf.parent as best-effort identity.
+	 * KR:
+	 *  - Obsidian 타입 정의상 leaf.parent는 "탭 그룹" 외 다른 타입(예: 모바일 drawer)일 수 있습니다.
+	 *  - 그래서 "children 배열이 있는지" 검사해서, 있을 때만 패널(탭 그룹)로 인정합니다.
+	 *
+	 * EN:
+	 *  - Obsidian typings allow leaf.parent to be non-tab-group types (e.g., mobile drawer).
+	 *  - We validate "children array exists" and only then treat it as a panel/tab group.
 	 */
 	private getPanelParent(leaf: WorkspaceLeaf): LeafParent | null {
-		const obj = leaf as unknown as Partial<ExtendedLeaf>;
-		return obj.parent ?? null;
+		const obj = leaf as unknown as { parent?: unknown };
+		const parent = obj.parent;
+
+		if (typeof parent !== "object" || parent === null) return null;
+
+		const maybe = parent as { children?: unknown };
+		if (!Array.isArray(maybe.children)) return null;
+
+		return parent as LeafParent;
 	}
 
 	/**

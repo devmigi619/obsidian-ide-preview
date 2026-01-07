@@ -6,7 +6,7 @@
 - **Single click** opens a note in a temporary **Preview tab**
 - Preview auto-locks (becomes permanent) on **edit**
 - Smart reuse prevents endless tab pile-up
-- ✅ **Each panel manages its own preview tab independently**
+- Each panel manages its own preview tab independently
 
 ---
 
@@ -53,23 +53,6 @@ Go to `Settings → Smart Tabs (VS Code Style)`:
 
 ---
 
-## 📦 Installation
-
-### Option 1: Using BRAT (Recommended for beta)
-1. Install the **BRAT** plugin from Community Plugins.
-2. Open BRAT settings and click **Add Beta plugin**.
-3. Paste this repository URL: `https://github.com/devmigi/obsidian-ide-preview`
-4. Click **Add Plugin**, then enable it in Obsidian.
-
-### Option 2: Manual installation
-1. Download the latest `main.js`, `manifest.json`, and `styles.css` from Releases.
-2. Create a folder named **`ide-style-preview`** in your vault:
-   - `<your vault>/.obsidian/plugins/ide-style-preview/`
-3. Put the files in that folder.
-4. Reload Obsidian and enable the plugin.
-
----
-
 ## ⚠️ Compatibility notes (best-effort)
 
 This plugin uses a few workspace internals on a best-effort basis to:
@@ -79,10 +62,6 @@ This plugin uses a few workspace internals on a best-effort basis to:
 If Obsidian changes internal layout APIs in a future version:
 - core behavior will continue to work in most cases,
 - but exact tab placement/restoration position or italic styling may degrade.
-
-Note:
-- Some internal operations are queued with `setTimeout(..., 0)` to run after the current UI update cycle.
-  This is for ordering/stability, not time-based behavior.
 
 ---
 

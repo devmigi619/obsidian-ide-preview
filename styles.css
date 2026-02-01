@@ -1,10 +1,11 @@
 /* 미리보기(Preview) 상태인 탭의 제목을 기울임꼴로 표시 */
 .workspace-tab-header.is-preview-tab .workspace-tab-header-inner-title {
-    font-style: italic !important;
-    opacity: 0.8; /* 선택사항: 약간 흐리게 해서 임시임을 강조 */
+  font-style: italic !important;
+  opacity: 0.8; /* 선택사항: 약간 흐리게 해서 임시임을 강조 */
 }
 
 /* 선택된 탭일 때도 기울임 유지 (원한다면 제거 가능) */
-.workspace-tab-header.is-preview-tab.is-active .workspace-tab-header-inner-title {
-    font-style: italic !important;
+.workspace-tab-header.is-preview-tab.is-active
+  .workspace-tab-header-inner-title {
+  font-style: italic !important;
 }

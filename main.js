@@ -95,8 +95,12 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     this.processedByOpenFile = /* @__PURE__ */ new WeakSet();
     /** Ctrl+Click 감지 플래그 */
     this.isCtrlClickPending = false;
-    /** 더블클릭으로 연 파일들 (탭 닫을 때 탐색기 정리용) */
-    this.filesOpenedByDoubleClick = /* @__PURE__ */ new Set();
+    /** 리본 버튼 더블클릭 시 기대하는 뷰 타입 (null이면 비활성) */
+    this.ribbonDoubleClickExpectedViewType = null;
+    /** 그래프 뷰 드래그 감지용 */
+    this.graphDragStartPos = null;
+    /** 새로 생성된 파일들 (제목편집모드 통일용) */
+    this.newlyCreatedFiles = /* @__PURE__ */ new Set();
     /** 가장 최근에 열린 leaf */
     this.lastActiveLeaf = null;
     /** 제목 변경 debounce 타이머 */
@@ -122,11 +126,76 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     this.patchOpenFile();
     this.patchSetViewState();
     this.patchDetach();
+    this.patchSetPinned();
+    this.patchVaultCreate();
   }
   registerEventHandlers() {
     this.registerFileOpenHandler();
     this.registerClickHandlers();
     this.registerPromotionTriggers();
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+  // 디버깅: File Explorer 상태 출력
+  // ─────────────────────────────────────────────────────────────────────────
+  /**
+   * File Explorer의 내부 상태와 DOM 상태를 상세히 출력
+   */
+  debugFileExplorerState(context) {
+    var _a, _b, _c, _d;
+    console.log(`
+${"=".repeat(60)}`);
+    console.log(`${CONFIG.LOG_PREFIX} DEBUG: ${context}`);
+    console.log(`${"=".repeat(60)}`);
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
+    console.log("1. File Explorer View \uC874\uC7AC:", !!explorerView);
+    if (explorerView) {
+      const activeDom = explorerView.activeDom;
+      console.log("2. activeDom:", activeDom);
+      console.log("   activeDom.file:", activeDom == null ? void 0 : activeDom.file);
+      console.log("   activeDom.file?.path:", (_b = activeDom == null ? void 0 : activeDom.file) == null ? void 0 : _b.path);
+      console.log("   activeDom.el:", activeDom == null ? void 0 : activeDom.el);
+      console.log("   activeDom.selfEl:", activeDom == null ? void 0 : activeDom.selfEl);
+      const focusedItem = explorerView.focusedItem;
+      console.log("3. focusedItem:", focusedItem);
+      console.log("   focusedItem?.file?.path:", (_c = focusedItem == null ? void 0 : focusedItem.file) == null ? void 0 : _c.path);
+    }
+    const activeItems = document.querySelectorAll(".nav-file-title.is-active, .tree-item-self.is-active");
+    console.log("4. DOM\uC5D0\uC11C is-active \uD074\uB798\uC2A4 \uAC1C\uC218:", activeItems.length);
+    activeItems.forEach((item, idx) => {
+      var _a2;
+      const path = item.getAttribute("data-path") || ((_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
+      console.log(`   [${idx}] path: ${path}`);
+      console.log(`   [${idx}] classList:`, Array.from(item.classList));
+    });
+    const focusedItems = document.querySelectorAll(".nav-file-title.has-focus, .tree-item-self.has-focus");
+    console.log("5. DOM\uC5D0\uC11C has-focus \uD074\uB798\uC2A4 \uAC1C\uC218:", focusedItems.length);
+    focusedItems.forEach((item, idx) => {
+      var _a2;
+      const path = item.getAttribute("data-path") || ((_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
+      console.log(`   [${idx}] path: ${path}`);
+      console.log(`   [${idx}] classList:`, Array.from(item.classList));
+    });
+    const activeLeaf = this.getActiveLeaf();
+    console.log("6. \uD604\uC7AC \uD65C\uC131 Leaf:", activeLeaf ? this.getLeafDebugId(activeLeaf) : "null");
+    console.log("   viewType:", (_d = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _d.getViewType());
+    console.log("   filePath:", activeLeaf ? this.getFilePath(activeLeaf) : "null");
+    console.log("   isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
+    console.log("7. \uC5F4\uB9B0 \uBAA8\uB4E0 \uD0ED:");
+    let tabIndex = 0;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      var _a2;
+      const location = this.getLeafLocation(leaf);
+      if (location === "main") {
+        const filePath = this.getFilePath(leaf);
+        const viewType = (_a2 = leaf.view) == null ? void 0 : _a2.getViewType();
+        const isPreview = this.previewLeaves.has(leaf);
+        console.log(`   [${tabIndex}] id: ${this.getLeafDebugId(leaf)}, type: ${viewType}, path: ${filePath}, preview: ${isPreview}`);
+        tabIndex++;
+      }
+    });
+    console.log(`${"=".repeat(60)}
+`);
   }
   // ─────────────────────────────────────────────────────────────────────────
   // 탭 상태 관리
@@ -208,6 +277,19 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     return null;
   }
   /**
+   * 같은 탭 그룹 내에서 특정 뷰 타입이 열린 탭 찾기
+   */
+  findLeafWithViewType(viewType, inSameGroupAs) {
+    var _a;
+    const siblings = this.getSiblingLeaves(inSameGroupAs);
+    for (const sibling of siblings) {
+      if (((_a = sibling.view) == null ? void 0 : _a.getViewType()) === viewType) {
+        return sibling;
+      }
+    }
+    return null;
+  }
+  /**
    * 같은 탭 그룹 내에서 Preview 탭 찾기
    */
   findPreviewLeaf(inSameGroupAs) {
@@ -230,6 +312,19 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
       return [];
     return children.filter((child) => child !== leaf);
   }
+  isFileOpenInAnyLeaf(filePath, excludeLeaf) {
+    let found = false;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (found)
+        return;
+      if (excludeLeaf && leaf === excludeLeaf)
+        return;
+      if (this.getFilePath(leaf) === filePath) {
+        found = true;
+      }
+    });
+    return found;
+  }
   // ─────────────────────────────────────────────────────────────────────────
   // openFile 패치
   // ─────────────────────────────────────────────────────────────────────────
@@ -246,6 +341,18 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     log("Patched openFile");
   }
   async handleOpenFile(leaf, file, openState, originalMethod) {
+    console.log(`
+${"-".repeat(40)}`);
+    console.log(`${CONFIG.LOG_PREFIX} handleOpenFile \uC9C4\uC785`);
+    console.log(`  file.path: ${file.path}`);
+    console.log(`  leaf.id: ${this.getLeafDebugId(leaf)}`);
+    this.debugFileExplorerState("handleOpenFile \uC9C4\uC785 \uC2DC\uC810");
+    if (this.newlyCreatedFiles.has(file.path)) {
+      this.newlyCreatedFiles.delete(file.path);
+      openState = openState || {};
+      openState.eState = openState.eState || {};
+      openState.eState.rename = "all";
+    }
     const currentState = this.getTabState(leaf);
     const intent = this.determineOpenIntent(file, openState);
     const isCtrlClick = this.consumeCtrlClickFlag();
@@ -264,11 +371,14 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     }
     if (shouldBePermanent) {
       if (currentState === "permanent" || currentState === "preview") {
-        return this.openInNewTab(leaf, file, openState, true, originalMethod);
+        const result3 = await this.openInNewTab(leaf, file, openState, true, originalMethod);
+        this.debugFileExplorerState("openInNewTab (permanent) \uC644\uB8CC \uD6C4");
+        return result3;
       }
       this.markAsProcessed(leaf);
       const result2 = await originalMethod.call(leaf, file, openState);
       this.setAsPermanent(leaf);
+      this.debugFileExplorerState("Empty \u2192 Permanent \uC644\uB8CC \uD6C4");
       return result2;
     }
     const existingPreview = this.findPreviewLeaf(leaf);
@@ -277,18 +387,23 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
       this.markAsProcessed(existingPreview);
       const result2 = await originalMethod.call(existingPreview, file, openState);
       this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
+      this.debugFileExplorerState("Preview \uC7AC\uC0AC\uC6A9 \uC644\uB8CC \uD6C4");
       return result2;
     }
     if (currentState === "permanent") {
-      return this.openInNewTab(leaf, file, openState, false, originalMethod);
+      const result2 = await this.openInNewTab(leaf, file, openState, false, originalMethod);
+      this.debugFileExplorerState("openInNewTab (preview) \uC644\uB8CC \uD6C4");
+      return result2;
     }
     this.markAsProcessed(leaf);
     const result = await originalMethod.call(leaf, file, openState);
     this.setAsPreview(leaf);
+    this.debugFileExplorerState("Empty/Preview \u2192 Preview \uC644\uB8CC \uD6C4");
     return result;
   }
   async openInNewTab(_fromLeaf, file, openState, asPermanent, originalMethod) {
-    log("  \u2192 Opening in new tab");
+    var _a;
+    const shouldApplyRename = ((_a = openState == null ? void 0 : openState.eState) == null ? void 0 : _a.rename) === "all";
     const newLeaf = this.app.workspace.getLeaf("tab");
     this.markAsProcessed(newLeaf);
     const result = await originalMethod.call(newLeaf, file, openState);
@@ -298,7 +413,20 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
       this.setAsPreview(newLeaf);
     }
     this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
+    if (shouldApplyRename) {
+      this.applyRenameMode(newLeaf);
+    }
     return result;
+  }
+  /**
+   * 제목편집모드 수동 적용
+   * - 새 탭에서 파일을 열 때 eState.rename이 무시되는 문제 해결
+   */
+  applyRenameMode(leaf) {
+    const view = leaf.view;
+    if (view == null ? void 0 : view.setEphemeralState) {
+      view.setEphemeralState({ rename: "all" });
+    }
   }
   // ─────────────────────────────────────────────────────────────────────────
   // setViewState 패치 (비파일 뷰 처리)
@@ -316,6 +444,7 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     log("Patched setViewState");
   }
   async handleSetViewState(leaf, viewState, eState, originalMethod) {
+    var _a;
     if (this.wasProcessed(leaf)) {
       this.clearProcessed(leaf);
       return originalMethod.call(leaf, viewState, eState);
@@ -328,15 +457,62 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
       return originalMethod.call(leaf, viewState, eState);
     }
     const currentState = this.getTabState(leaf);
-    log(`setViewState: type=${viewType}, state=${currentState}`);
-    if (currentState === "permanent") {
-      const newLeaf = this.app.workspace.getLeaf("tab");
-      const result2 = await originalMethod.call(newLeaf, viewState, eState);
-      this.setAsPreview(newLeaf);
+    const shouldBePermanent = this.consumeRibbonDoubleClickFlag(viewType);
+    const leafId = this.getLeafDebugId(leaf);
+    log(`setViewState: type=${viewType}, state=${currentState}, permanent=${shouldBePermanent}, leafId=${leafId}`);
+    if (((_a = leaf.view) == null ? void 0 : _a.getViewType()) === viewType) {
+      if (shouldBePermanent && this.previewLeaves.has(leaf)) {
+        log(`  \u2192 Same view type, promoting to permanent`);
+        this.promoteToPermament(leaf);
+      } else {
+        log(`  \u2192 Same view type, skipping`);
+      }
+      return;
+    }
+    const existingLeaf = this.findLeafWithViewType(viewType, leaf);
+    if (existingLeaf) {
+      log(`  \u2192 Already open: ${viewType}, focusing existing tab`);
+      if (shouldBePermanent && this.previewLeaves.has(existingLeaf)) {
+        this.promoteToPermament(existingLeaf);
+      }
+      this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
+      return;
+    }
+    if (shouldBePermanent) {
+      if (currentState === "permanent" || currentState === "preview") {
+        const newLeaf = this.app.workspace.getLeaf("tab");
+        const result3 = await originalMethod.call(newLeaf, viewState, eState);
+        this.setAsPermanent(newLeaf);
+        this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
+        return result3;
+      }
+      const result2 = await originalMethod.call(leaf, viewState, eState);
+      this.setAsPermanent(leaf);
       return result2;
     }
+    const existingPreview = this.findPreviewLeaf(leaf);
+    if (existingPreview) {
+      const previewId = this.getLeafDebugId(existingPreview);
+      log(`  \u2192 Reusing existing preview tab (leafId=${previewId})`);
+      const result2 = await originalMethod.call(existingPreview, viewState, eState);
+      log(`  \u2192 After setViewState, isPreview=${this.previewLeaves.has(existingPreview)}`);
+      this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
+      return result2;
+    }
+    if (currentState === "permanent") {
+      const newLeaf = this.app.workspace.getLeaf("tab");
+      const newLeafId = this.getLeafDebugId(newLeaf);
+      log(`  \u2192 Creating new preview tab (leafId=${newLeafId})`);
+      const result2 = await originalMethod.call(newLeaf, viewState, eState);
+      this.setAsPreview(newLeaf);
+      log(`  \u2192 After setAsPreview, isPreview=${this.previewLeaves.has(newLeaf)}`);
+      this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
+      return result2;
+    }
+    log(`  \u2192 Using current tab (leafId=${leafId})`);
     const result = await originalMethod.call(leaf, viewState, eState);
     this.setAsPreview(leaf);
+    log(`  \u2192 After setAsPreview, isPreview=${this.previewLeaves.has(leaf)}`);
     return result;
   }
   // ─────────────────────────────────────────────────────────────────────────
@@ -347,12 +523,19 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       detach(original) {
         return function() {
-          const path = plugin.getFilePath(this);
-          if (path && plugin.filesOpenedByDoubleClick.has(path)) {
-            plugin.clearFileExplorerSelection(path);
-            plugin.filesOpenedByDoubleClick.delete(path);
-          }
-          return original.call(this);
+          const filePath = plugin.getFilePath(this);
+          const leafId = plugin.getLeafDebugId(this);
+          console.log(`
+${"-".repeat(40)}`);
+          console.log(`${CONFIG.LOG_PREFIX} detach \uC9C4\uC785`);
+          console.log(`  \uB2EB\uD788\uB294 \uD0ED leaf.id: ${leafId}`);
+          console.log(`  \uB2EB\uD788\uB294 \uD0ED filePath: ${filePath}`);
+          plugin.debugFileExplorerState("detach \uC9C4\uC785 \uC2DC\uC810 (clearAllSidebarSelections \uD638\uCD9C \uC804)");
+          plugin.clearAllSidebarSelections();
+          plugin.debugFileExplorerState("clearAllSidebarSelections \uD638\uCD9C \uD6C4");
+          const result = original.call(this);
+          plugin.debugFileExplorerState("original detach \uC644\uB8CC \uD6C4");
+          return result;
         };
       }
     });
@@ -360,32 +543,152 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     log("Patched detach");
   }
   // ─────────────────────────────────────────────────────────────────────────
+  // setPinned 패치 (탭 고정 시 승격)
+  // ─────────────────────────────────────────────────────────────────────────
+  patchSetPinned() {
+    const plugin = this;
+    const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
+      setPinned(original) {
+        return function(pinned) {
+          if (pinned && plugin.previewLeaves.has(this)) {
+            log("Tab pinned \u2192 promote");
+            plugin.promoteToPermament(this);
+          }
+          return original.call(this, pinned);
+        };
+      }
+    });
+    this.cleanupFunctions.push(uninstall);
+    log("Patched setPinned");
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+  // vault.create 패치 (새 파일 생성 감지)
+  // ─────────────────────────────────────────────────────────────────────────
+  patchVaultCreate() {
+    const plugin = this;
+    const vault = this.app.vault;
+    const originalCreate = vault.create.bind(vault);
+    vault.create = async function(path, data, options) {
+      plugin.newlyCreatedFiles.add(path);
+      return originalCreate(path, data, options);
+    };
+    this.cleanupFunctions.push(() => {
+      vault.create = originalCreate;
+    });
+    log("Patched vault.create");
+  }
+  // ─────────────────────────────────────────────────────────────────────────
   // 이벤트 핸들러
   // ─────────────────────────────────────────────────────────────────────────
   registerFileOpenHandler() {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        var _a;
+        var _a, _b;
+        console.log(`
+${"-".repeat(40)}`);
+        console.log(`${CONFIG.LOG_PREFIX} file-open \uC774\uBCA4\uD2B8`);
+        console.log(`  file: ${(_a = file == null ? void 0 : file.path) != null ? _a : "null"}`);
+        this.debugFileExplorerState("file-open \uC774\uBCA4\uD2B8 \uBC1C\uC0DD");
         if (!file)
           return;
         const activeLeaf = this.getActiveLeaf();
-        if (((_a = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _a.getViewType()) === "markdown") {
+        if (((_b = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _b.getViewType()) === "markdown") {
           this.lastActiveLeaf = activeLeaf;
         }
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        var _a;
+        if (!this.ribbonDoubleClickExpectedViewType || !leaf) {
+          return;
+        }
+        const viewType = (_a = leaf.view) == null ? void 0 : _a.getViewType();
+        const expectedType = this.ribbonDoubleClickExpectedViewType;
+        if (viewType === expectedType && this.previewLeaves.has(leaf)) {
+          log(`Active leaf change \u2192 promoting expected ${viewType} view`);
+          this.promoteToPermament(leaf);
+        }
+        this.ribbonDoubleClickExpectedViewType = null;
       })
     );
   }
   registerClickHandlers() {
     this.registerDomEvent(document, "click", (evt) => {
+      const target = evt.target;
+      const fileEl = target.closest("[data-path]");
+      if (fileEl) {
+        const path = fileEl.getAttribute("data-path");
+        console.log(`
+${"-".repeat(40)}`);
+        console.log(`${CONFIG.LOG_PREFIX} \uD30C\uC77C \uC694\uC18C \uD074\uB9AD`);
+        console.log(`  \uD074\uB9AD\uB41C \uD30C\uC77C path: ${path}`);
+        console.log(`  Ctrl/Meta \uD0A4: ${evt.ctrlKey || evt.metaKey}`);
+        this.debugFileExplorerState("\uD30C\uC77C \uC694\uC18C \uD074\uB9AD \uC2DC\uC810");
+      }
       if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
         this.isCtrlClickPending = true;
       }
     }, true);
     this.registerDomEvent(document, "dblclick", (evt) => {
+      const target = evt.target;
+      const fileEl = target.closest("[data-path]");
+      if (fileEl) {
+        const path = fileEl.getAttribute("data-path");
+        console.log(`
+${"-".repeat(40)}`);
+        console.log(`${CONFIG.LOG_PREFIX} \uD30C\uC77C \uC694\uC18C \uB354\uBE14\uD074\uB9AD`);
+        console.log(`  \uB354\uBE14\uD074\uB9AD\uB41C \uD30C\uC77C path: ${path}`);
+        this.debugFileExplorerState("\uD30C\uC77C \uC694\uC18C \uB354\uBE14\uD074\uB9AD \uC2DC\uC810");
+      }
       this.handleDoubleClick(evt);
+    }, true);
+    this.registerDomEvent(document, "mousedown", (evt) => {
+      var _a;
+      const target = evt.target;
+      const activeLeaf = this.getActiveLeaf();
+      const viewType = (_a = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _a.getViewType();
+      if (viewType === "graph") {
+        const leafId = activeLeaf ? this.getLeafDebugId(activeLeaf) : "null";
+        console.log("[IDE Preview] mousedown debug:");
+        console.log("  leafId:", leafId);
+        console.log("  target.tagName:", target.tagName);
+        console.log("  activeLeaf viewType:", viewType);
+        console.log("  isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
+      }
+      if (viewType === "graph") {
+        this.graphDragStartPos = { x: evt.clientX, y: evt.clientY };
+        console.log("[IDE Preview] graphDragStartPos set:", this.graphDragStartPos);
+      }
+    }, true);
+    this.registerDomEvent(document, "mouseup", (evt) => {
+      var _a;
+      if (!this.graphDragStartPos)
+        return;
+      const activeLeaf = this.getActiveLeaf();
+      const viewType = (_a = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _a.getViewType();
+      const leafId = activeLeaf ? this.getLeafDebugId(activeLeaf) : "null";
+      console.log("[IDE Preview] mouseup debug:");
+      console.log("  leafId:", leafId);
+      console.log("  viewType:", viewType);
+      if (viewType === "graph") {
+        const dx = evt.clientX - this.graphDragStartPos.x;
+        const dy = evt.clientY - this.graphDragStartPos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        console.log("  drag distance:", distance);
+        console.log("  isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
+        if (distance > 10) {
+          if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
+            log("Graph drag detected \u2192 promote");
+            this.promoteToPermament(activeLeaf);
+          }
+        }
+      }
+      this.graphDragStartPos = null;
     }, true);
   }
   handleDoubleClick(evt) {
+    var _a, _b, _c;
     const target = evt.target;
     if (target.closest(".workspace-tab-header")) {
       const activeLeaf = this.getActiveLeaf();
@@ -400,12 +703,8 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
       const leaf = this.findLeafByContentEl(sidebarContent);
       if (leaf && this.isInSidebar(leaf)) {
         if (this.lastActiveLeaf && this.previewLeaves.has(this.lastActiveLeaf)) {
-          const path = this.getFilePath(this.lastActiveLeaf);
-          log("Sidebar double-click \u2192 promote:", path);
+          log("Sidebar double-click \u2192 promote");
           this.promoteToPermament(this.lastActiveLeaf);
-          if (path) {
-            this.filesOpenedByDoubleClick.add(path);
-          }
         }
         return;
       }
@@ -414,6 +713,41 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
       if (this.lastActiveLeaf && this.previewLeaves.has(this.lastActiveLeaf)) {
         log("Graph double-click \u2192 promote");
         this.promoteToPermament(this.lastActiveLeaf);
+      }
+      return;
+    }
+    const ribbonButton = target.closest(".side-dock-ribbon-action");
+    if (ribbonButton) {
+      const ariaLabel = (_a = ribbonButton.getAttribute("aria-label")) != null ? _a : "";
+      const activeLeaf = this.getActiveLeaf();
+      const activeViewType = (_b = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _b.getViewType();
+      log("Ribbon button double-click");
+      log(`  aria-label: "${ariaLabel}"`);
+      log(`  activeLeaf viewType: ${activeViewType}`);
+      log(`  isPreview: ${activeLeaf ? this.previewLeaves.has(activeLeaf) : false}`);
+      if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
+        log(`  \u2192 Promoting active preview tab`);
+        this.promoteToPermament(activeLeaf);
+        return;
+      }
+      const ariaLower = ariaLabel.toLowerCase();
+      let viewType = null;
+      if (ariaLower.includes("graph") || ariaLabel.includes("\uADF8\uB798\uD504")) {
+        viewType = "graph";
+      } else if (ariaLower.includes("canvas") || ariaLabel.includes("\uCE94\uBC84\uC2A4")) {
+        viewType = "canvas";
+      }
+      if (viewType) {
+        const activeLeaf2 = this.getActiveLeaf();
+        if (((_c = activeLeaf2 == null ? void 0 : activeLeaf2.view) == null ? void 0 : _c.getViewType()) === viewType && this.previewLeaves.has(activeLeaf2)) {
+          log(`  \u2192 Promoting existing ${viewType} view`);
+          this.promoteToPermament(activeLeaf2);
+          return;
+        }
+      }
+      if (viewType) {
+        this.ribbonDoubleClickExpectedViewType = viewType;
+        log(`  \u2192 Expecting ${viewType} view on next active-leaf-change`);
       }
     }
   }
@@ -504,33 +838,39 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     });
   }
   // ─────────────────────────────────────────────────────────────────────────
-  // 파일 탐색기 정리
+  // 사이드바 선택 상태 정리
   // ─────────────────────────────────────────────────────────────────────────
-  clearFileExplorerSelection(path) {
-    var _a, _b;
-    const explorerView = this.getFileExplorerView();
-    const fileExplorer = document.querySelector(".nav-files-container");
-    if (((_b = (_a = explorerView == null ? void 0 : explorerView.activeDom) == null ? void 0 : _a.file) == null ? void 0 : _b.path) === path) {
-      log("Clearing explorer activeDom:", path);
-      explorerView.activeDom = null;
+  /**
+   * 사이드바의 모든 파일 선택 상태 해제 (SPEC 7.5)
+   * - 탭이 닫힐 때 호출
+   * - DOM 클래스만 제거
+   */
+  clearAllSidebarSelections() {
+    var _a, _b, _c;
+    log("=== clearAllSidebarSelections ===");
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
+    if (explorerView) {
+      console.log("  clearAllSidebarSelections \uB0B4\uBD80:");
+      console.log("    explorerView.activeDom:", explorerView.activeDom);
+      console.log("    explorerView.activeDom?.file?.path:", (_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path);
     }
-    if (fileExplorer) {
-      const fileItem = fileExplorer.querySelector(`[data-path="${path}"]`);
-      if (fileItem) {
-        fileItem.classList.remove(CONFIG.CSS_CLASSES.ACTIVE);
-        fileItem.classList.remove(CONFIG.CSS_CLASSES.HAS_FOCUS);
-      }
-    }
-  }
-  getFileExplorerView() {
-    let view = null;
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      var _a;
-      if (((_a = leaf.view) == null ? void 0 : _a.getViewType()) === "file-explorer") {
-        view = leaf.view;
-      }
+    const sidebars = document.querySelectorAll(
+      ".workspace-split.mod-left-split, .workspace-split.mod-right-split"
+    );
+    sidebars.forEach((sidebar) => {
+      const activeItems = sidebar.querySelectorAll(
+        ".tree-item-self.is-active, .tree-item-self.has-focus"
+      );
+      console.log(`    sidebar\uC5D0\uC11C \uCC3E\uC740 active/focus \uC694\uC18C \uC218: ${activeItems.length}`);
+      activeItems.forEach((item) => {
+        var _a2;
+        const path = (_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path");
+        console.log(`      \uC81C\uAC70 \uB300\uC0C1: ${path}`);
+        item.classList.remove("is-active");
+        item.classList.remove("has-focus");
+      });
     });
-    return view;
   }
   // ─────────────────────────────────────────────────────────────────────────
   // 유틸리티
@@ -577,6 +917,13 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   consumeCtrlClickFlag() {
     if (this.isCtrlClickPending) {
       this.isCtrlClickPending = false;
+      return true;
+    }
+    return false;
+  }
+  consumeRibbonDoubleClickFlag(viewType) {
+    if (this.ribbonDoubleClickExpectedViewType === viewType) {
+      this.ribbonDoubleClickExpectedViewType = null;
       return true;
     }
     return false;

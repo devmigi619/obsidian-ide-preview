@@ -111,6 +111,15 @@ export default class IDEStylePreviewPlugin extends Plugin {
   /** 패치 해제 함수들 */
   private cleanupFunctions: (() => void)[] = [];
 
+  /** 디버그용: 이벤트 시퀀스 카운터 */
+  private eventSequence = 0;
+
+  /** 디버그용: MutationObserver */
+  private debugObserver: MutationObserver | null = null;
+
+  /** 디버그용: 마지막 hover된 경로 */
+  private lastHoveredPath: string | null = null;
+
   // ─────────────────────────────────────────────────────────────────────────
   // 라이프사이클
   // ─────────────────────────────────────────────────────────────────────────
@@ -118,11 +127,22 @@ export default class IDEStylePreviewPlugin extends Plugin {
   async onload() {
     log("Plugin loaded");
 
+    this.app.workspace.onLayoutReady(() => {
+      // 포괄적 디버그 모드 시작
+      this.setupComprehensiveDebug();
+    });
+
     this.installPatches();
     this.registerEventHandlers();
   }
 
   onunload() {
+    // 디버그 Observer 정리
+    if (this.debugObserver) {
+      this.debugObserver.disconnect();
+      this.debugObserver = null;
+    }
+
     this.cleanupFunctions.forEach((cleanup) => cleanup());
     this.cleanupFunctions = [];
 
@@ -130,6 +150,327 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
     log("Plugin unloaded");
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 포괄적 디버그 시스템
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 포괄적인 디버그 설정
+   * 1. DOM 클래스 변화 실시간 추적 (MutationObserver)
+   * 2. 마우스 이벤트 추적 (hover 동작 파악)
+   * 3. CSS 스타일 분석 (hover vs is-active)
+   */
+  private setupComprehensiveDebug() {
+    console.log("\n" + "=".repeat(70));
+    console.log("★★★ 포괄적 디버그 모드 시작 ★★★");
+    console.log("=".repeat(70));
+
+    this.setupDOMMutationObserver();
+    this.setupMouseEventTracking();
+    this.analyzeCSSStyles();
+    this.setupWorkspaceEventTracking();
+
+    console.log("\n" + "=".repeat(70));
+    console.log("디버그 모드 준비 완료 - 이제 테스트를 시작하세요");
+    console.log("=".repeat(70) + "\n");
+  }
+
+  /**
+   * 1. DOM 클래스 변화 실시간 추적
+   */
+  private setupDOMMutationObserver() {
+    const leftSidebar = document.querySelector(".workspace-split.mod-left-split");
+    if (!leftSidebar) {
+      console.log("[DEBUG] 왼쪽 사이드바를 찾을 수 없음");
+      return;
+    }
+
+    this.debugObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === "attributes" && mutation.attributeName === "class") {
+          const target = mutation.target as HTMLElement;
+
+          // tree-item-self 또는 nav-file-title 요소만 추적
+          if (target.classList.contains("tree-item-self") ||
+              target.classList.contains("nav-file-title")) {
+
+            const oldValue = mutation.oldValue || "";
+            const newValue = target.className;
+
+            if (oldValue !== newValue) {
+              const path = target.getAttribute("data-path") ||
+                           target.closest("[data-path]")?.getAttribute("data-path") ||
+                           "unknown";
+
+              // 추가/제거된 클래스 계산
+              const oldClasses = new Set(oldValue.split(" ").filter(Boolean));
+              const newClasses = new Set(newValue.split(" ").filter(Boolean));
+
+              const added: string[] = [];
+              const removed: string[] = [];
+
+              newClasses.forEach(c => {
+                if (!oldClasses.has(c)) added.push(c);
+              });
+              oldClasses.forEach(c => {
+                if (!newClasses.has(c)) removed.push(c);
+              });
+
+              // 관련 변화만 로그 (is-active, has-focus, is-selected 등)
+              const isRelevant = added.some(c => 
+                c.includes("active") || c.includes("focus") || c.includes("selected")
+              ) || removed.some(c => 
+                c.includes("active") || c.includes("focus") || c.includes("selected")
+              );
+
+              if (isRelevant) {
+                const timestamp = new Date().toISOString().substr(11, 12);
+                console.log(`\n[DOM변화] ${timestamp} | ${path}`);
+                if (added.length > 0) console.log(`  ✚ 추가: ${added.join(", ")}`);
+                if (removed.length > 0) console.log(`  ✖ 제거: ${removed.join(", ")}`);
+                console.log(`  현재: ${newValue}`);
+
+                // 스택 트레이스 (어디서 변경되었는지 추적)
+                console.log(`  호출 스택:`);
+                const stack = new Error().stack?.split("\n").slice(2, 6).join("\n    ");
+                console.log(`    ${stack}`);
+              }
+            }
+          }
+        }
+      });
+    });
+
+    this.debugObserver.observe(leftSidebar, {
+      attributes: true,
+      attributeOldValue: true,
+      subtree: true,
+      attributeFilter: ["class"]
+    });
+
+    console.log("[DEBUG] MutationObserver 설정 완료 - 클래스 변화 추적 중");
+  }
+
+  /**
+   * 2. 마우스 이벤트 추적 (hover 동작 파악)
+   */
+  private setupMouseEventTracking() {
+    // mouseover
+    this.registerDomEvent(document, "mouseover", (evt: MouseEvent) => {
+      const target = evt.target as HTMLElement;
+      const fileEl = target.closest(".tree-item-self, .nav-file-title") as HTMLElement;
+
+      if (fileEl) {
+        const path = fileEl.getAttribute("data-path") ||
+                     fileEl.closest("[data-path]")?.getAttribute("data-path");
+
+        if (path && path !== this.lastHoveredPath) {
+          this.lastHoveredPath = path;
+          const timestamp = new Date().toISOString().substr(11, 12);
+          
+          // computed style 확인
+          const computedStyle = window.getComputedStyle(fileEl);
+          const bgColor = computedStyle.backgroundColor;
+          
+          console.log(`[HOVER IN] ${timestamp} | ${path}`);
+          console.log(`  클래스: ${fileEl.className}`);
+          console.log(`  background-color: ${bgColor}`);
+        }
+      }
+    }, true);
+
+    // mouseout
+    this.registerDomEvent(document, "mouseout", (evt: MouseEvent) => {
+      const target = evt.target as HTMLElement;
+      const fileEl = target.closest(".tree-item-self, .nav-file-title") as HTMLElement;
+
+      if (fileEl) {
+        const path = fileEl.getAttribute("data-path") ||
+                     fileEl.closest("[data-path]")?.getAttribute("data-path");
+
+        if (path && path === this.lastHoveredPath) {
+          const timestamp = new Date().toISOString().substr(11, 12);
+          console.log(`[HOVER OUT] ${timestamp} | ${path}`);
+          console.log(`  클래스: ${fileEl.className}`);
+
+          // 50ms 후 background-color 재확인 (hover 해제 후)
+          setTimeout(() => {
+            const computedStyle = window.getComputedStyle(fileEl);
+            console.log(`  (50ms 후) background-color: ${computedStyle.backgroundColor}`);
+            console.log(`  (50ms 후) 클래스: ${fileEl.className}`);
+          }, 50);
+
+          this.lastHoveredPath = null;
+        }
+      }
+    }, true);
+
+    console.log("[DEBUG] 마우스 이벤트 리스너 설정 완료");
+  }
+
+  /**
+ * 3. CSS 스타일 분석
+ */
+private analyzeCSSStyles() {
+  console.log("\n[CSS 분석] hover와 is-active 관련 스타일:");
+
+  const relevantPatterns = [
+    ".is-active",
+    ":hover",
+    ".has-focus",
+    ".nav-file-title",
+    ".tree-item-self"
+  ];
+
+  const foundRules: { selector: string; bg: string; source: string }[] = [];
+
+  // StyleSheetList를 Array로 변환
+  const sheets = Array.from(document.styleSheets);
+  
+  for (const sheet of sheets) {
+    try {
+      const rules = sheet.cssRules || sheet.rules;
+      if (!rules) continue;
+      
+      const source = sheet.href || "inline";
+
+      // CSSRuleList도 Array로 변환
+      const ruleArray = Array.from(rules);
+      
+      for (const rule of ruleArray) {
+        if (rule instanceof CSSStyleRule) {
+          const selector = rule.selectorText;
+          
+          // 관련 셀렉터인지 확인
+          const isRelevant = relevantPatterns.some(p => selector.includes(p));
+          
+          if (isRelevant) {
+            // background 관련 스타일 확인
+            const bgColor = rule.style.backgroundColor;
+            const bg = rule.style.background;
+            
+            if (bgColor || bg) {
+              foundRules.push({
+                selector,
+                bg: bgColor || bg,
+                source: source.split("/").pop() || source
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Cross-origin 스타일시트 - 무시
+    }
+  }
+
+  // 정렬하여 출력
+  foundRules.sort((a, b) => a.selector.localeCompare(b.selector));
+  foundRules.forEach(r => {
+    console.log(`  [${r.source}] ${r.selector}`);
+    console.log(`    → ${r.bg}`);
+  });
+
+  if (foundRules.length === 0) {
+    console.log("  (관련 CSS 규칙을 찾을 수 없음 - CSS 변수 사용 가능성)");
+  }
+
+  // CSS 변수 확인
+  console.log("\n[CSS 변수] 배경 관련 변수:");
+  const root = document.documentElement;
+  const computedRoot = window.getComputedStyle(root);
+  
+  const bgVars = [
+    "--background-modifier-hover",
+    "--background-modifier-active-hover",
+    "--nav-item-background-hover",
+    "--nav-item-background-active",
+    "--interactive-hover",
+    "--interactive-accent"
+  ];
+
+  bgVars.forEach(varName => {
+    const value = computedRoot.getPropertyValue(varName);
+    if (value) {
+      console.log(`  ${varName}: ${value.trim()}`);
+    }
+  });
+}
+
+  /**
+   * 4. 워크스페이스 이벤트 추적
+   */
+  private setupWorkspaceEventTracking() {
+    // active-leaf-change
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        const timestamp = new Date().toISOString().substr(11, 12);
+        console.log(`\n[EVENT: active-leaf-change] ${timestamp}`);
+        
+        if (leaf) {
+          const leafId = this.getLeafDebugId(leaf);
+          const viewType = leaf.view?.getViewType() ?? "null";
+          const filePath = this.getFilePath(leaf);
+          
+          console.log(`  leaf.id: ${leafId}`);
+          console.log(`  viewType: ${viewType}`);
+          console.log(`  filePath: ${filePath ?? "null"}`);
+        } else {
+          console.log(`  leaf: null`);
+        }
+
+        this.logExplorerState("active-leaf-change 후");
+      })
+    );
+
+    // layout-change
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        const timestamp = new Date().toISOString().substr(11, 12);
+        console.log(`\n[EVENT: layout-change] ${timestamp}`);
+        this.logExplorerState("layout-change 후");
+      })
+    );
+
+    console.log("[DEBUG] 워크스페이스 이벤트 리스너 설정 완료");
+  }
+
+  /**
+   * File Explorer 상태 간단 로깅
+   */
+  private logExplorerState(context: string) {
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = explorerLeaves[0]?.view as any;
+
+    console.log(`  [Explorer 상태] ${context}`);
+    
+    if (explorerView) {
+      console.log(`    activeDom?.file?.path: ${explorerView.activeDom?.file?.path ?? "null"}`);
+      console.log(`    tree.activeDom?.file?.path: ${explorerView.tree?.activeDom?.file?.path ?? "null"}`);
+      console.log(`    tree.focusedItem?.file?.path: ${explorerView.tree?.focusedItem?.file?.path ?? "null"}`);
+    }
+
+    // DOM 상태
+    const activeEls = document.querySelectorAll(".tree-item-self.is-active, .nav-file-title.is-active");
+    const focusEls = document.querySelectorAll(".tree-item-self.has-focus, .nav-file-title.has-focus");
+    
+    console.log(`    DOM is-active: ${activeEls.length}개`);
+    activeEls.forEach(el => {
+      const path = el.getAttribute("data-path") || el.closest("[data-path]")?.getAttribute("data-path");
+      console.log(`      - ${path}`);
+    });
+    
+    console.log(`    DOM has-focus: ${focusEls.length}개`);
+    focusEls.forEach(el => {
+      const path = el.getAttribute("data-path") || el.closest("[data-path]")?.getAttribute("data-path");
+      console.log(`      - ${path}`);
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 기존 디버깅 함수들
+  // ─────────────────────────────────────────────────────────────────────────
 
   private installPatches() {
     this.patchOpenFile();
@@ -145,66 +486,88 @@ export default class IDEStylePreviewPlugin extends Plugin {
     this.registerPromotionTriggers();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 디버깅: File Explorer 상태 출력
-  // ─────────────────────────────────────────────────────────────────────────
+  private getNextSequence(): number {
+    return ++this.eventSequence;
+  }
 
   /**
-   * File Explorer의 내부 상태와 DOM 상태를 상세히 출력
+   * File Explorer의 내부 상태와 DOM 상태를 상세히 출력 (모두 펼쳐서)
    */
   private debugFileExplorerState(context: string) {
-    console.log(`\n${"=".repeat(60)}`);
-    console.log(`${CONFIG.LOG_PREFIX} DEBUG: ${context}`);
-    console.log(`${"=".repeat(60)}`);
+    const seq = this.getNextSequence();
+    const timestamp = new Date().toISOString().substr(11, 12);
+    
+    console.log(`\n${"=".repeat(70)}`);
+    console.log(`[${seq}] ${timestamp} | ${CONFIG.LOG_PREFIX} ${context}`);
+    console.log(`${"=".repeat(70)}`);
 
     // 1. File Explorer View 가져오기
     const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
     const explorerView = explorerLeaves[0]?.view as any;
 
-    console.log("1. File Explorer View 존재:", !!explorerView);
+    console.log(`[${seq}] 1. File Explorer View 존재: ${!!explorerView}`);
 
     if (explorerView) {
-      // 2. activeDom 상태
+      // 2. activeDom 상태 (펼쳐서)
       const activeDom = explorerView.activeDom;
-      console.log("2. activeDom:", activeDom);
-      console.log("   activeDom.file:", activeDom?.file);
-      console.log("   activeDom.file?.path:", activeDom?.file?.path);
-      console.log("   activeDom.el:", activeDom?.el);
-      console.log("   activeDom.selfEl:", activeDom?.selfEl);
+      console.log(`[${seq}] 2. activeDom 상태:`);
+      console.log(`[${seq}]    - activeDom 자체: ${activeDom === null ? 'null' : activeDom === undefined ? 'undefined' : 'object'}`);
+      console.log(`[${seq}]    - activeDom?.file?.path: ${activeDom?.file?.path ?? '없음'}`);
+      console.log(`[${seq}]    - activeDom?.selfEl 존재: ${!!activeDom?.selfEl}`);
+      if (activeDom?.selfEl) {
+        console.log(`[${seq}]    - activeDom.selfEl.className: ${activeDom.selfEl.className}`);
+      }
 
-      // 3. focusedItem 상태 (있다면)
-      const focusedItem = explorerView.focusedItem;
-      console.log("3. focusedItem:", focusedItem);
-      console.log("   focusedItem?.file?.path:", focusedItem?.file?.path);
+      // 2-1. tree.activeDom 상태
+      const treeActiveDom = explorerView.tree?.activeDom;
+      console.log(`[${seq}] 2-1. tree.activeDom 상태:`);
+      console.log(`[${seq}]    - tree.activeDom 자체: ${treeActiveDom === null ? 'null' : treeActiveDom === undefined ? 'undefined' : 'object'}`);
+      console.log(`[${seq}]    - tree.activeDom?.file?.path: ${treeActiveDom?.file?.path ?? '없음'}`);
+      console.log(`[${seq}]    - activeDom === tree.activeDom: ${activeDom === treeActiveDom}`);
+
+      // 3. focusedItem 상태
+      const focusedItem = explorerView.tree?.focusedItem;
+      console.log(`[${seq}] 3. tree.focusedItem 상태:`);
+      console.log(`[${seq}]    - focusedItem 자체: ${focusedItem === null ? 'null' : focusedItem === undefined ? 'undefined' : 'object'}`);
+      console.log(`[${seq}]    - focusedItem?.file?.path: ${focusedItem?.file?.path ?? '없음'}`);
     }
 
     // 4. DOM 상태: is-active 클래스가 있는 요소들
     const activeItems = document.querySelectorAll(".nav-file-title.is-active, .tree-item-self.is-active");
-    console.log("4. DOM에서 is-active 클래스 개수:", activeItems.length);
-    activeItems.forEach((item, idx) => {
-      const path = item.getAttribute("data-path") || item.closest("[data-path]")?.getAttribute("data-path");
-      console.log(`   [${idx}] path: ${path}`);
-      console.log(`   [${idx}] classList:`, Array.from(item.classList));
-    });
+    console.log(`[${seq}] 4. DOM is-active 요소 (${activeItems.length}개):`);
+    if (activeItems.length === 0) {
+      console.log(`[${seq}]    - (없음)`);
+    } else {
+      activeItems.forEach((item, idx) => {
+        const path = item.getAttribute("data-path") || item.closest("[data-path]")?.getAttribute("data-path");
+        console.log(`[${seq}]    - [${idx}] path: ${path}`);
+        console.log(`[${seq}]    - [${idx}] className: ${item.className}`);
+      });
+    }
 
     // 5. DOM 상태: has-focus 클래스가 있는 요소들
     const focusedItems = document.querySelectorAll(".nav-file-title.has-focus, .tree-item-self.has-focus");
-    console.log("5. DOM에서 has-focus 클래스 개수:", focusedItems.length);
-    focusedItems.forEach((item, idx) => {
-      const path = item.getAttribute("data-path") || item.closest("[data-path]")?.getAttribute("data-path");
-      console.log(`   [${idx}] path: ${path}`);
-      console.log(`   [${idx}] classList:`, Array.from(item.classList));
-    });
+    console.log(`[${seq}] 5. DOM has-focus 요소 (${focusedItems.length}개):`);
+    if (focusedItems.length === 0) {
+      console.log(`[${seq}]    - (없음)`);
+    } else {
+      focusedItems.forEach((item, idx) => {
+        const path = item.getAttribute("data-path") || item.closest("[data-path]")?.getAttribute("data-path");
+        console.log(`[${seq}]    - [${idx}] path: ${path}`);
+        console.log(`[${seq}]    - [${idx}] className: ${item.className}`);
+      });
+    }
 
     // 6. 현재 열린 탭 정보
     const activeLeaf = this.getActiveLeaf();
-    console.log("6. 현재 활성 Leaf:", activeLeaf ? this.getLeafDebugId(activeLeaf) : "null");
-    console.log("   viewType:", activeLeaf?.view?.getViewType());
-    console.log("   filePath:", activeLeaf ? this.getFilePath(activeLeaf) : "null");
-    console.log("   isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
+    console.log(`[${seq}] 6. 현재 활성 Leaf:`);
+    console.log(`[${seq}]    - leaf id: ${activeLeaf ? this.getLeafDebugId(activeLeaf) : 'null'}`);
+    console.log(`[${seq}]    - viewType: ${activeLeaf?.view?.getViewType() ?? 'null'}`);
+    console.log(`[${seq}]    - filePath: ${activeLeaf ? this.getFilePath(activeLeaf) : 'null'}`);
+    console.log(`[${seq}]    - isPreview: ${activeLeaf ? this.previewLeaves.has(activeLeaf) : false}`);
 
     // 7. 모든 열린 탭 목록
-    console.log("7. 열린 모든 탭:");
+    console.log(`[${seq}] 7. 메인 영역 열린 탭:`);
     let tabIndex = 0;
     this.app.workspace.iterateAllLeaves((leaf) => {
       const location = this.getLeafLocation(leaf);
@@ -212,12 +575,15 @@ export default class IDEStylePreviewPlugin extends Plugin {
         const filePath = this.getFilePath(leaf);
         const viewType = leaf.view?.getViewType();
         const isPreview = this.previewLeaves.has(leaf);
-        console.log(`   [${tabIndex}] id: ${this.getLeafDebugId(leaf)}, type: ${viewType}, path: ${filePath}, preview: ${isPreview}`);
+        console.log(`[${seq}]    - [${tabIndex}] id=${this.getLeafDebugId(leaf)}, type=${viewType}, path=${filePath}, preview=${isPreview}`);
         tabIndex++;
       }
     });
+    if (tabIndex === 0) {
+      console.log(`[${seq}]    - (열린 탭 없음)`);
+    }
 
-    console.log(`${"=".repeat(60)}\n`);
+    console.log(`${"=".repeat(70)}\n`);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -251,11 +617,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // 위치 판단 (사용자 멘탈 모델 기반)
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Leaf가 사이드바에 있는지 판단
-   * - 사용자 관점: "왼쪽/오른쪽 패널"
-   * - 구현 세부사항(file-explorer, bookmarks 등)에 의존하지 않음
-   */
   private getLeafLocation(leaf: WorkspaceLeaf): LeafLocation {
     const workspace = this.app.workspace as unknown as InternalWorkspace;
     const root = leaf.getRoot();
@@ -275,18 +636,11 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // 의도 판별
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * 파일 열기 의도 판별
-   * - create: 새 노트 생성, Daily Note 등 → Permanent
-   * - browse: 탐색 목적 → Preview
-   */
   private determineOpenIntent(file: TFile, openState?: any): OpenIntent {
-    // 새 노트 생성 (이름 변경 모드로 열림)
     if (openState?.eState?.rename === "all") {
       return "create";
     }
 
-    // Daily Note (source 모드 + 날짜 패턴)
     if (openState?.state?.mode === "source") {
       if (CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
         return "create";
@@ -300,9 +654,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // Leaf 탐색
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * 같은 탭 그룹 내에서 특정 파일이 열린 탭 찾기
-   */
   private findLeafWithFile(
     filePath: string,
     inSameGroupAs: WorkspaceLeaf
@@ -317,9 +668,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     return null;
   }
 
-  /**
-   * 같은 탭 그룹 내에서 특정 뷰 타입이 열린 탭 찾기
-   */
   private findLeafWithViewType(
     viewType: string,
     inSameGroupAs: WorkspaceLeaf
@@ -334,9 +682,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     return null;
   }
 
-  /**
-   * 같은 탭 그룹 내에서 Preview 탭 찾기
-   */
   private findPreviewLeaf(inSameGroupAs: WorkspaceLeaf): WorkspaceLeaf | null {
     const siblings = this.getSiblingLeaves(inSameGroupAs);
 
@@ -348,9 +693,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     return null;
   }
 
-  /**
-   * 같은 탭 그룹의 형제 탭들 가져오기
-   */
   private getSiblingLeaves(leaf: WorkspaceLeaf): WorkspaceLeaf[] {
     const internal = leaf as InternalLeaf;
     const children = internal.parent?.children;
@@ -403,12 +745,10 @@ export default class IDEStylePreviewPlugin extends Plugin {
     openState: any,
     originalMethod: Function
   ) {
-    // ★ 디버그: openFile 진입
-    console.log(`\n${"-".repeat(40)}`);
-    console.log(`${CONFIG.LOG_PREFIX} handleOpenFile 진입`);
-    console.log(`  file.path: ${file.path}`);
-    console.log(`  leaf.id: ${this.getLeafDebugId(leaf)}`);
-    this.debugFileExplorerState("handleOpenFile 진입 시점");
+    const seq = this.getNextSequence();
+    console.log(`\n[${seq}] ▶▶▶ handleOpenFile 시작: ${file.path}`);
+    console.log(`[${seq}]     leaf.id: ${this.getLeafDebugId(leaf)}`);
+    this.debugFileExplorerState(`handleOpenFile 진입 - ${file.path}`);
 
     // 새로 생성된 파일인 경우 → 제목편집모드 강제 적용
     if (this.newlyCreatedFiles.has(file.path)) {
@@ -423,68 +763,63 @@ export default class IDEStylePreviewPlugin extends Plugin {
     const isCtrlClick = this.consumeCtrlClickFlag();
     const shouldBePermanent = intent === "create" || isCtrlClick;
 
-    log(`openFile: ${file.path}`);
-    log(`  state=${currentState}, intent=${intent}, permanent=${shouldBePermanent}`);
+    console.log(`[${seq}]     state=${currentState}, intent=${intent}, permanent=${shouldBePermanent}`);
 
     // 이미 같은 파일이 열려있으면 무시
     if (this.getFilePath(leaf) === file.path) {
-      log("  → Same file, skipping");
+      console.log(`[${seq}]     → Same file, skipping`);
       return;
     }
 
     // 다른 탭에 이미 열려있으면 포커스만 이동
     const existingLeaf = this.findLeafWithFile(file.path, leaf);
     if (existingLeaf && intent === "browse" && !isCtrlClick) {
-      log("  → Already open, focusing existing tab");
+      console.log(`[${seq}]     → Already open, focusing existing tab`);
       this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
       return;
     }
 
     // Permanent로 열어야 하는 경우
     if (shouldBePermanent) {
-      // Permanent/Preview 탭 보존: 새 탭에서 열기
       if (currentState === "permanent" || currentState === "preview") {
+        console.log(`[${seq}]     → Opening in new tab (permanent)`);
         const result = await this.openInNewTab(leaf, file, openState, true, originalMethod);
-        // ★ 디버그: openInNewTab (permanent) 완료 후
-        this.debugFileExplorerState("openInNewTab (permanent) 완료 후");
+        this.debugFileExplorerState(`handleOpenFile 완료 (new tab permanent) - ${file.path}`);
         return result;
       }
-      // Empty 탭: 현재 탭에서 Permanent로 열기
+      console.log(`[${seq}]     → Opening in current tab (permanent)`);
       this.markAsProcessed(leaf);
       const result = await originalMethod.call(leaf, file, openState);
       this.setAsPermanent(leaf);
-      // ★ 디버그: Empty → Permanent 완료 후
-      this.debugFileExplorerState("Empty → Permanent 완료 후");
+      this.debugFileExplorerState(`handleOpenFile 완료 (current tab permanent) - ${file.path}`);
       return result;
     }
 
     // Preview로 열어야 하는 경우: 기존 Preview 탭 재사용
     const existingPreview = this.findPreviewLeaf(leaf);
     if (existingPreview) {
-      log("  → Reusing existing preview tab");
+      console.log(`[${seq}]     → Reusing existing preview tab`);
       this.markAsProcessed(existingPreview);
       const result = await originalMethod.call(existingPreview, file, openState);
       this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
-      // ★ 디버그: Preview 재사용 완료 후
-      this.debugFileExplorerState("Preview 재사용 완료 후");
+      this.debugFileExplorerState(`handleOpenFile 완료 (reuse preview) - ${file.path}`);
       return result;
     }
 
     // Preview가 없는 경우
     if (currentState === "permanent") {
-      // Permanent 탭 보존: 새 Preview 탭 생성
+      console.log(`[${seq}]     → Opening in new tab (preview)`);
       const result = await this.openInNewTab(leaf, file, openState, false, originalMethod);
-      // ★ 디버그: openInNewTab (preview) 완료 후
-      this.debugFileExplorerState("openInNewTab (preview) 완료 후");
+      this.debugFileExplorerState(`handleOpenFile 완료 (new tab preview) - ${file.path}`);
       return result;
     }
 
     // Empty 또는 Preview 탭: 현재 탭에서 Preview로 열기
+    console.log(`[${seq}]     → Opening in current tab (preview)`);
     this.markAsProcessed(leaf);
     const result = await originalMethod.call(leaf, file, openState);
     this.setAsPreview(leaf);
-    // ★ 디버그: Empty/Preview → Preview 완료 후
-    this.debugFileExplorerState("Empty/Preview → Preview 완료 후");
+    this.debugFileExplorerState(`handleOpenFile 완료 (current tab preview) - ${file.path}`);
     return result;
   }
 
@@ -495,7 +830,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     asPermanent: boolean,
     originalMethod: Function
   ) {
-    // openState가 originalMethod에 의해 mutate될 수 있으므로 미리 저장
     const shouldApplyRename = openState?.eState?.rename === "all";
 
     const newLeaf = this.app.workspace.getLeaf("tab");
@@ -510,7 +844,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
     this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
 
-    // 저장해둔 값으로 판단 (originalMethod가 openState를 mutate하므로)
     if (shouldApplyRename) {
       this.applyRenameMode(newLeaf);
     }
@@ -518,10 +851,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     return result;
   }
 
-  /**
-   * 제목편집모드 수동 적용
-   * - 새 탭에서 파일을 열 때 eState.rename이 무시되는 문제 해결
-   */
   private applyRenameMode(leaf: WorkspaceLeaf) {
     const view = leaf.view as any;
     if (view?.setEphemeralState) {
@@ -554,7 +883,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     eState: any,
     originalMethod: Function
   ) {
-    // openFile에서 이미 처리했으면 패스
     if (this.wasProcessed(leaf)) {
       this.clearProcessed(leaf);
       return originalMethod.call(leaf, viewState, eState);
@@ -562,23 +890,19 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
     const viewType = viewState?.type;
 
-    // 파일 뷰나 empty는 openFile에서 처리됨
     if (viewType === "markdown" || viewType === "empty") {
       return originalMethod.call(leaf, viewState, eState);
     }
 
-    // 사이드바의 뷰는 그대로 유지
     if (this.isInSidebar(leaf)) {
       return originalMethod.call(leaf, viewState, eState);
     }
 
-    // 메인 영역의 비파일 뷰 (graph, canvas, pdf 등)
     const currentState = this.getTabState(leaf);
     const shouldBePermanent = this.consumeRibbonDoubleClickFlag(viewType);
     const leafId = this.getLeafDebugId(leaf);
     log(`setViewState: type=${viewType}, state=${currentState}, permanent=${shouldBePermanent}, leafId=${leafId}`);
 
-    // 현재 탭이 이미 같은 뷰 타입이면 무시 (단, Permanent로 승격 요청 시 승격)
     if (leaf.view?.getViewType() === viewType) {
       if (shouldBePermanent && this.previewLeaves.has(leaf)) {
         log(`  → Same view type, promoting to permanent`);
@@ -589,7 +913,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
       return;
     }
 
-    // 같은 뷰 타입이 이미 열려있으면 포커스만 이동 (단, Permanent로 승격 요청 시 승격)
     const existingLeaf = this.findLeafWithViewType(viewType, leaf);
     if (existingLeaf) {
       log(`  → Already open: ${viewType}, focusing existing tab`);
@@ -600,7 +923,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
       return;
     }
 
-    // Permanent로 열어야 하는 경우
     if (shouldBePermanent) {
       if (currentState === "permanent" || currentState === "preview") {
         const newLeaf = this.app.workspace.getLeaf("tab");
@@ -609,25 +931,21 @@ export default class IDEStylePreviewPlugin extends Plugin {
         this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
         return result;
       }
-      // Empty 탭: 현재 탭에서 Permanent로 열기
       const result = await originalMethod.call(leaf, viewState, eState);
       this.setAsPermanent(leaf);
       return result;
     }
 
-    // 기존 Preview 탭 재사용
     const existingPreview = this.findPreviewLeaf(leaf);
     if (existingPreview) {
       const previewId = this.getLeafDebugId(existingPreview);
       log(`  → Reusing existing preview tab (leafId=${previewId})`);
       const result = await originalMethod.call(existingPreview, viewState, eState);
-      // 뷰가 변경되어도 Preview 상태 유지 확인
       log(`  → After setViewState, isPreview=${this.previewLeaves.has(existingPreview)}`);
       this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
       return result;
     }
 
-    // Preview가 없는 경우
     if (currentState === "permanent") {
       const newLeaf = this.app.workspace.getLeaf("tab");
       const newLeafId = this.getLeafDebugId(newLeaf);
@@ -639,7 +957,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
       return result;
     }
 
-    // Empty 또는 Preview 탭: 현재 탭에서 열기
     log(`  → Using current tab (leafId=${leafId})`);
     const result = await originalMethod.call(leaf, viewState, eState);
     this.setAsPreview(leaf);
@@ -660,23 +977,19 @@ export default class IDEStylePreviewPlugin extends Plugin {
           const filePath = plugin.getFilePath(this);
           const leafId = plugin.getLeafDebugId(this);
 
-          // ★ 디버그: detach 진입
-          console.log(`\n${"-".repeat(40)}`);
-          console.log(`${CONFIG.LOG_PREFIX} detach 진입`);
-          console.log(`  닫히는 탭 leaf.id: ${leafId}`);
-          console.log(`  닫히는 탭 filePath: ${filePath}`);
-          plugin.debugFileExplorerState("detach 진입 시점 (clearAllSidebarSelections 호출 전)");
+          const seq = plugin.getNextSequence();
+          console.log(`\n[${seq}] ▶▶▶ detach 시작`);
+          console.log(`[${seq}]     닫히는 탭 leaf.id: ${leafId}`);
+          console.log(`[${seq}]     닫히는 탭 filePath: ${filePath}`);
+          plugin.debugFileExplorerState(`detach 진입 (clearAllSidebarSelections 전)`);
 
-          // 탭이 닫힐 때 사이드바 선택 상태 해제 (SPEC 7.5)
           plugin.clearAllSidebarSelections();
 
-          // ★ 디버그: clearAllSidebarSelections 호출 후
-          plugin.debugFileExplorerState("clearAllSidebarSelections 호출 후");
+          plugin.debugFileExplorerState(`clearAllSidebarSelections 완료`);
 
           const result = original.call(this);
 
-          // ★ 디버그: original.call 완료 후
-          plugin.debugFileExplorerState("original detach 완료 후");
+          plugin.debugFileExplorerState(`original detach 완료`);
 
           return result;
         };
@@ -697,7 +1010,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     const uninstall = around(WorkspaceLeaf.prototype, {
       setPinned(original) {
         return function (this: WorkspaceLeaf, pinned: boolean) {
-          // 탭 고정 시 Preview → Permanent 승격
           if (pinned && plugin.previewLeaves.has(this)) {
             log("Tab pinned → promote");
             plugin.promoteToPermament(this);
@@ -721,7 +1033,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     const vault = this.app.vault;
     const originalCreate = vault.create.bind(vault);
 
-    // vault.create 패치: 파일 생성 직전에 경로를 기록 (제목편집모드 통일용)
     vault.create = async function (path: string, data: string, options?: any) {
       plugin.newlyCreatedFiles.add(path);
       return originalCreate(path, data, options);
@@ -741,11 +1052,9 @@ export default class IDEStylePreviewPlugin extends Plugin {
   private registerFileOpenHandler() {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        // ★ 디버그: file-open 이벤트
-        console.log(`\n${"-".repeat(40)}`);
-        console.log(`${CONFIG.LOG_PREFIX} file-open 이벤트`);
-        console.log(`  file: ${file?.path ?? "null"}`);
-        this.debugFileExplorerState("file-open 이벤트 발생");
+        const seq = this.getNextSequence();
+        console.log(`\n[${seq}] ◆◆◆ file-open 이벤트: ${file?.path ?? 'null'}`);
+        this.debugFileExplorerState(`file-open 이벤트 - ${file?.path ?? 'null'}`);
 
         if (!file) return;
 
@@ -753,13 +1062,9 @@ export default class IDEStylePreviewPlugin extends Plugin {
         if (activeLeaf?.view?.getViewType() === "markdown") {
           this.lastActiveLeaf = activeLeaf;
         }
-
-        // 파일 탐색기 선택 상태는 Obsidian이 자동으로 처리
-        // 수동으로 설정하면 Obsidian 내부 상태와 충돌함
       })
     );
 
-    // 리본 더블클릭 후 뷰가 활성화될 때 승격 처리
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (!this.ribbonDoubleClickExpectedViewType || !leaf) {
@@ -769,35 +1074,30 @@ export default class IDEStylePreviewPlugin extends Plugin {
         const viewType = leaf.view?.getViewType();
         const expectedType = this.ribbonDoubleClickExpectedViewType;
 
-        // 기대한 뷰 타입과 일치하고 Preview면 승격
         if (viewType === expectedType && this.previewLeaves.has(leaf)) {
           log(`Active leaf change → promoting expected ${viewType} view`);
           this.promoteToPermament(leaf);
         }
 
-        // 어떤 경우든 기대값 초기화 (다음 이벤트에 영향 안 주도록)
         this.ribbonDoubleClickExpectedViewType = null;
       })
     );
   }
 
   private registerClickHandlers() {
-    // 싱글 클릭 감지 (디버깅용)
+    // 싱글 클릭 감지
     this.registerDomEvent(document, "click", (evt: MouseEvent) => {
       const target = evt.target as HTMLElement;
       const fileEl = target.closest("[data-path]") as HTMLElement | null;
 
       if (fileEl) {
         const path = fileEl.getAttribute("data-path");
-        // ★ 디버그: 파일 요소 클릭
-        console.log(`\n${"-".repeat(40)}`);
-        console.log(`${CONFIG.LOG_PREFIX} 파일 요소 클릭`);
-        console.log(`  클릭된 파일 path: ${path}`);
-        console.log(`  Ctrl/Meta 키: ${evt.ctrlKey || evt.metaKey}`);
-        this.debugFileExplorerState("파일 요소 클릭 시점");
+        const seq = this.getNextSequence();
+        console.log(`\n[${seq}] ● 파일 요소 싱글클릭: ${path}`);
+        console.log(`[${seq}]   Ctrl/Meta: ${evt.ctrlKey || evt.metaKey}`);
+        this.debugFileExplorerState(`싱글클릭 - ${path}`);
       }
 
-      // Ctrl+Click 감지
       if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
         this.isCtrlClickPending = true;
       }
@@ -810,11 +1110,9 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
       if (fileEl) {
         const path = fileEl.getAttribute("data-path");
-        // ★ 디버그: 파일 요소 더블클릭
-        console.log(`\n${"-".repeat(40)}`);
-        console.log(`${CONFIG.LOG_PREFIX} 파일 요소 더블클릭`);
-        console.log(`  더블클릭된 파일 path: ${path}`);
-        this.debugFileExplorerState("파일 요소 더블클릭 시점");
+        const seq = this.getNextSequence();
+        console.log(`\n[${seq}] ●● 파일 요소 더블클릭: ${path}`);
+        this.debugFileExplorerState(`더블클릭 - ${path}`);
       }
 
       this.handleDoubleClick(evt);
@@ -822,24 +1120,11 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
     // 그래프 뷰 드래그 감지
     this.registerDomEvent(document, "mousedown", (evt: MouseEvent) => {
-      const target = evt.target as HTMLElement;
       const activeLeaf = this.getActiveLeaf();
       const viewType = activeLeaf?.view?.getViewType();
 
-      // 디버깅: 그래프 뷰에서 마우스다운 시 정보 출력
-      if (viewType === "graph") {
-        const leafId = activeLeaf ? this.getLeafDebugId(activeLeaf) : "null";
-        console.log("[IDE Preview] mousedown debug:");
-        console.log("  leafId:", leafId);
-        console.log("  target.tagName:", target.tagName);
-        console.log("  activeLeaf viewType:", viewType);
-        console.log("  isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
-      }
-
-      // 그래프 뷰가 활성화된 상태에서 마우스다운
       if (viewType === "graph") {
         this.graphDragStartPos = { x: evt.clientX, y: evt.clientY };
-        console.log("[IDE Preview] graphDragStartPos set:", this.graphDragStartPos);
       }
     }, true);
 
@@ -849,20 +1134,11 @@ export default class IDEStylePreviewPlugin extends Plugin {
       const activeLeaf = this.getActiveLeaf();
       const viewType = activeLeaf?.view?.getViewType();
 
-      const leafId = activeLeaf ? this.getLeafDebugId(activeLeaf) : "null";
-      console.log("[IDE Preview] mouseup debug:");
-      console.log("  leafId:", leafId);
-      console.log("  viewType:", viewType);
-
       if (viewType === "graph") {
         const dx = evt.clientX - this.graphDragStartPos.x;
         const dy = evt.clientY - this.graphDragStartPos.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        console.log("  drag distance:", distance);
-        console.log("  isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
-
-        // 최소 드래그 거리 (10px) 이상 이동했으면 조작으로 판단
         if (distance > 10) {
           if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
             log("Graph drag detected → promote");
@@ -878,7 +1154,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
   private handleDoubleClick(evt: MouseEvent) {
     const target = evt.target as HTMLElement;
 
-    // 탭 헤더 더블클릭 → 승격
     if (target.closest(".workspace-tab-header")) {
       const activeLeaf = this.getActiveLeaf();
       if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
@@ -888,12 +1163,10 @@ export default class IDEStylePreviewPlugin extends Plugin {
       return;
     }
 
-    // 사이드바에서 더블클릭 → 승격
     const sidebarContent = target.closest(".workspace-leaf-content");
     if (sidebarContent) {
       const leaf = this.findLeafByContentEl(sidebarContent as HTMLElement);
       if (leaf && this.isInSidebar(leaf)) {
-        // Preview면 승격
         if (this.lastActiveLeaf && this.previewLeaves.has(this.lastActiveLeaf)) {
           log("Sidebar double-click → promote");
           this.promoteToPermament(this.lastActiveLeaf);
@@ -902,7 +1175,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
       }
     }
 
-    // 그래프 뷰 더블클릭 → 승격
     if (target.closest(".graph-view-container")) {
       if (this.lastActiveLeaf && this.previewLeaves.has(this.lastActiveLeaf)) {
         log("Graph double-click → promote");
@@ -911,27 +1183,20 @@ export default class IDEStylePreviewPlugin extends Plugin {
       return;
     }
 
-    // 리본 버튼 더블클릭 → 다음 뷰를 Permanent로
     const ribbonButton = target.closest(".side-dock-ribbon-action");
     if (ribbonButton) {
       const ariaLabel = ribbonButton.getAttribute("aria-label") ?? "";
       const activeLeaf = this.getActiveLeaf();
-      const activeViewType = activeLeaf?.view?.getViewType();
 
       log("Ribbon button double-click");
       log(`  aria-label: "${ariaLabel}"`);
-      log(`  activeLeaf viewType: ${activeViewType}`);
-      log(`  isPreview: ${activeLeaf ? this.previewLeaves.has(activeLeaf) : false}`);
 
-      // 현재 활성 탭이 Preview면 즉시 승격 (aria-label 무관하게)
       if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
         log(`  → Promoting active preview tab`);
         this.promoteToPermament(activeLeaf);
         return;
       }
 
-      // 뷰가 아직 열리지 않은 경우, active-leaf-change에서 처리하도록 설정
-      // aria-label에서 뷰 타입 추출
       const ariaLower = ariaLabel.toLowerCase();
       let viewType: string | null = null;
 
@@ -942,15 +1207,14 @@ export default class IDEStylePreviewPlugin extends Plugin {
       }
 
       if (viewType) {
-        const activeLeaf = this.getActiveLeaf();
-        if (activeLeaf?.view?.getViewType() === viewType && this.previewLeaves.has(activeLeaf)) {
+        const currentActiveLeaf = this.getActiveLeaf();
+        if (currentActiveLeaf?.view?.getViewType() === viewType && this.previewLeaves.has(currentActiveLeaf)) {
           log(`  → Promoting existing ${viewType} view`);
-          this.promoteToPermament(activeLeaf);
+          this.promoteToPermament(currentActiveLeaf);
           return;
         }
       }
 
-      // 뷰가 아직 열리지 않은 경우, active-leaf-change에서 처리하도록 설정
       if (viewType) {
         this.ribbonDoubleClickExpectedViewType = viewType;
         log(`  → Expecting ${viewType} view on next active-leaf-change`);
@@ -959,7 +1223,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
   }
 
   private registerPromotionTriggers() {
-    // 편집 시 승격
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, info) => {
         const leaf = (info as any).leaf as WorkspaceLeaf | undefined;
@@ -970,7 +1233,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
       })
     );
 
-    // 파일명 변경 시 승격
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         this.app.workspace.iterateAllLeaves((leaf) => {
@@ -982,7 +1244,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
       })
     );
 
-    // 인라인 제목 편집 시
     this.registerDomEvent(document, "input", (evt: Event) => {
       this.handleInlineTitleEdit(evt);
     }, true);
@@ -995,13 +1256,11 @@ export default class IDEStylePreviewPlugin extends Plugin {
     const activeLeaf = this.getActiveLeaf();
     if (!activeLeaf) return;
 
-    // Preview면 승격
     if (this.previewLeaves.has(activeLeaf)) {
       log("Inline title edit → promote");
       this.promoteToPermament(activeLeaf);
     }
 
-    // 실시간 파일명 변경
     this.scheduleFileRename(activeLeaf, target.textContent?.trim() ?? "");
   }
 
@@ -1059,45 +1318,54 @@ export default class IDEStylePreviewPlugin extends Plugin {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // 사이드바 선택 상태 정리
-  // ─────────────────────────────────────────────────────────────────────────
-
   /**
-   * 사이드바의 모든 파일 선택 상태 해제 (SPEC 7.5)
-   * - 탭이 닫힐 때 호출
-   * - DOM 클래스만 제거
+   * 사이드바의 파일 선택 상태 초기화
    */
   private clearAllSidebarSelections() {
-    log("=== clearAllSidebarSelections ===");
+    const seq = this.getNextSequence();
+    console.log(`\n[${seq}] ◇◇◇ clearAllSidebarSelections 실행`);
 
-    // ★ 디버그: 현재 File Explorer의 activeDom 상태
     const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
     const explorerView = explorerLeaves[0]?.view as any;
 
-    if (explorerView) {
-      console.log("  clearAllSidebarSelections 내부:");
-      console.log("    explorerView.activeDom:", explorerView.activeDom);
-      console.log("    explorerView.activeDom?.file?.path:", explorerView.activeDom?.file?.path);
+    if (!explorerView) {
+      console.log(`[${seq}]   → explorerView 없음, 스킵`);
+      return;
     }
 
-    // 사이드바 영역 내의 모든 선택 상태 DOM 클래스 제거
-    const sidebars = document.querySelectorAll(
-      ".workspace-split.mod-left-split, .workspace-split.mod-right-split"
-    );
+    // 상태 확인 (호출 전)
+    console.log(`[${seq}]   [BEFORE] explorerView.activeDom?.file?.path: ${explorerView.activeDom?.file?.path ?? 'null'}`);
+    console.log(`[${seq}]   [BEFORE] tree.activeDom?.file?.path: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}`);
+    console.log(`[${seq}]   [BEFORE] tree.focusedItem?.file?.path: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
 
-    sidebars.forEach((sidebar) => {
-      const activeItems = sidebar.querySelectorAll(
-        ".tree-item-self.is-active, .tree-item-self.has-focus"
-      );
-      console.log(`    sidebar에서 찾은 active/focus 요소 수: ${activeItems.length}`);
-      activeItems.forEach((item) => {
-        const path = item.closest("[data-path]")?.getAttribute("data-path");
-        console.log(`      제거 대상: ${path}`);
-        item.classList.remove("is-active");
-        item.classList.remove("has-focus");
-      });
-    });
+    // 1. onFileOpen(null) 호출 (explorerView.activeDom 초기화 + is-active 제거)
+    if (explorerView.onFileOpen) {
+      console.log(`[${seq}]   → onFileOpen(null) 호출`);
+      explorerView.onFileOpen(null);
+    }
+
+    // 2. tree.setFocusedItem(null) 호출 (has-focus 제거)
+    if (explorerView.tree?.setFocusedItem) {
+      console.log(`[${seq}]   → tree.setFocusedItem(null) 호출`);
+      explorerView.tree.setFocusedItem(null);
+    }
+
+    // 3. tree.activeDom도 초기화 (explorerView.activeDom과 일치시킴)
+    if (explorerView.tree && explorerView.tree.activeDom !== null) {
+      console.log(`[${seq}]   → tree.activeDom = null 설정`);
+      explorerView.tree.activeDom = null;
+    }
+
+    // 상태 확인 (호출 후)
+    console.log(`[${seq}]   [AFTER] explorerView.activeDom?.file?.path: ${explorerView.activeDom?.file?.path ?? 'null'}`);
+    console.log(`[${seq}]   [AFTER] tree.activeDom?.file?.path: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}`);
+    console.log(`[${seq}]   [AFTER] tree.focusedItem?.file?.path: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
+
+    // DOM 상태 확인
+    const activeItems = document.querySelectorAll(".tree-item-self.is-active");
+    const focusedItems = document.querySelectorAll(".tree-item-self.has-focus");
+    console.log(`[${seq}]   [AFTER DOM] is-active 개수: ${activeItems.length}`);
+    console.log(`[${seq}]   [AFTER DOM] has-focus 개수: ${focusedItems.length}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1116,7 +1384,6 @@ export default class IDEStylePreviewPlugin extends Plugin {
     return (leaf as unknown as InternalLeaf).id ?? "unknown";
   }
 
-  /** activeLeaf의 대체 (deprecated 회피) */
   private getActiveLeaf(): WorkspaceLeaf | null {
     return this.app.workspace.getMostRecentLeaf();
   }

@@ -107,21 +107,290 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     this.titleRenameTimer = null;
     /** 패치 해제 함수들 */
     this.cleanupFunctions = [];
+    /** 디버그용: 이벤트 시퀀스 카운터 */
+    this.eventSequence = 0;
+    /** 디버그용: MutationObserver */
+    this.debugObserver = null;
+    /** 디버그용: 마지막 hover된 경로 */
+    this.lastHoveredPath = null;
   }
   // ─────────────────────────────────────────────────────────────────────────
   // 라이프사이클
   // ─────────────────────────────────────────────────────────────────────────
   async onload() {
     log("Plugin loaded");
+    this.app.workspace.onLayoutReady(() => {
+      this.setupComprehensiveDebug();
+    });
     this.installPatches();
     this.registerEventHandlers();
   }
   onunload() {
+    if (this.debugObserver) {
+      this.debugObserver.disconnect();
+      this.debugObserver = null;
+    }
     this.cleanupFunctions.forEach((cleanup) => cleanup());
     this.cleanupFunctions = [];
     this.removeAllPreviewStyles();
     log("Plugin unloaded");
   }
+  // ─────────────────────────────────────────────────────────────────────────
+  // 포괄적 디버그 시스템
+  // ─────────────────────────────────────────────────────────────────────────
+  /**
+   * 포괄적인 디버그 설정
+   * 1. DOM 클래스 변화 실시간 추적 (MutationObserver)
+   * 2. 마우스 이벤트 추적 (hover 동작 파악)
+   * 3. CSS 스타일 분석 (hover vs is-active)
+   */
+  setupComprehensiveDebug() {
+    console.log("\n" + "=".repeat(70));
+    console.log("\u2605\u2605\u2605 \uD3EC\uAD04\uC801 \uB514\uBC84\uADF8 \uBAA8\uB4DC \uC2DC\uC791 \u2605\u2605\u2605");
+    console.log("=".repeat(70));
+    this.setupDOMMutationObserver();
+    this.setupMouseEventTracking();
+    this.analyzeCSSStyles();
+    this.setupWorkspaceEventTracking();
+    console.log("\n" + "=".repeat(70));
+    console.log("\uB514\uBC84\uADF8 \uBAA8\uB4DC \uC900\uBE44 \uC644\uB8CC - \uC774\uC81C \uD14C\uC2A4\uD2B8\uB97C \uC2DC\uC791\uD558\uC138\uC694");
+    console.log("=".repeat(70) + "\n");
+  }
+  /**
+   * 1. DOM 클래스 변화 실시간 추적
+   */
+  setupDOMMutationObserver() {
+    const leftSidebar = document.querySelector(".workspace-split.mod-left-split");
+    if (!leftSidebar) {
+      console.log("[DEBUG] \uC67C\uCABD \uC0AC\uC774\uB4DC\uBC14\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC74C");
+      return;
+    }
+    this.debugObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        var _a, _b;
+        if (mutation.type === "attributes" && mutation.attributeName === "class") {
+          const target = mutation.target;
+          if (target.classList.contains("tree-item-self") || target.classList.contains("nav-file-title")) {
+            const oldValue = mutation.oldValue || "";
+            const newValue = target.className;
+            if (oldValue !== newValue) {
+              const path = target.getAttribute("data-path") || ((_a = target.closest("[data-path]")) == null ? void 0 : _a.getAttribute("data-path")) || "unknown";
+              const oldClasses = new Set(oldValue.split(" ").filter(Boolean));
+              const newClasses = new Set(newValue.split(" ").filter(Boolean));
+              const added = [];
+              const removed = [];
+              newClasses.forEach((c) => {
+                if (!oldClasses.has(c))
+                  added.push(c);
+              });
+              oldClasses.forEach((c) => {
+                if (!newClasses.has(c))
+                  removed.push(c);
+              });
+              const isRelevant = added.some(
+                (c) => c.includes("active") || c.includes("focus") || c.includes("selected")
+              ) || removed.some(
+                (c) => c.includes("active") || c.includes("focus") || c.includes("selected")
+              );
+              if (isRelevant) {
+                const timestamp = new Date().toISOString().substr(11, 12);
+                console.log(`
+[DOM\uBCC0\uD654] ${timestamp} | ${path}`);
+                if (added.length > 0)
+                  console.log(`  \u271A \uCD94\uAC00: ${added.join(", ")}`);
+                if (removed.length > 0)
+                  console.log(`  \u2716 \uC81C\uAC70: ${removed.join(", ")}`);
+                console.log(`  \uD604\uC7AC: ${newValue}`);
+                console.log(`  \uD638\uCD9C \uC2A4\uD0DD:`);
+                const stack = (_b = new Error().stack) == null ? void 0 : _b.split("\n").slice(2, 6).join("\n    ");
+                console.log(`    ${stack}`);
+              }
+            }
+          }
+        }
+      });
+    });
+    this.debugObserver.observe(leftSidebar, {
+      attributes: true,
+      attributeOldValue: true,
+      subtree: true,
+      attributeFilter: ["class"]
+    });
+    console.log("[DEBUG] MutationObserver \uC124\uC815 \uC644\uB8CC - \uD074\uB798\uC2A4 \uBCC0\uD654 \uCD94\uC801 \uC911");
+  }
+  /**
+   * 2. 마우스 이벤트 추적 (hover 동작 파악)
+   */
+  setupMouseEventTracking() {
+    this.registerDomEvent(document, "mouseover", (evt) => {
+      var _a;
+      const target = evt.target;
+      const fileEl = target.closest(".tree-item-self, .nav-file-title");
+      if (fileEl) {
+        const path = fileEl.getAttribute("data-path") || ((_a = fileEl.closest("[data-path]")) == null ? void 0 : _a.getAttribute("data-path"));
+        if (path && path !== this.lastHoveredPath) {
+          this.lastHoveredPath = path;
+          const timestamp = new Date().toISOString().substr(11, 12);
+          const computedStyle = window.getComputedStyle(fileEl);
+          const bgColor = computedStyle.backgroundColor;
+          console.log(`[HOVER IN] ${timestamp} | ${path}`);
+          console.log(`  \uD074\uB798\uC2A4: ${fileEl.className}`);
+          console.log(`  background-color: ${bgColor}`);
+        }
+      }
+    }, true);
+    this.registerDomEvent(document, "mouseout", (evt) => {
+      var _a;
+      const target = evt.target;
+      const fileEl = target.closest(".tree-item-self, .nav-file-title");
+      if (fileEl) {
+        const path = fileEl.getAttribute("data-path") || ((_a = fileEl.closest("[data-path]")) == null ? void 0 : _a.getAttribute("data-path"));
+        if (path && path === this.lastHoveredPath) {
+          const timestamp = new Date().toISOString().substr(11, 12);
+          console.log(`[HOVER OUT] ${timestamp} | ${path}`);
+          console.log(`  \uD074\uB798\uC2A4: ${fileEl.className}`);
+          setTimeout(() => {
+            const computedStyle = window.getComputedStyle(fileEl);
+            console.log(`  (50ms \uD6C4) background-color: ${computedStyle.backgroundColor}`);
+            console.log(`  (50ms \uD6C4) \uD074\uB798\uC2A4: ${fileEl.className}`);
+          }, 50);
+          this.lastHoveredPath = null;
+        }
+      }
+    }, true);
+    console.log("[DEBUG] \uB9C8\uC6B0\uC2A4 \uC774\uBCA4\uD2B8 \uB9AC\uC2A4\uB108 \uC124\uC815 \uC644\uB8CC");
+  }
+  /**
+  * 3. CSS 스타일 분석
+  */
+  analyzeCSSStyles() {
+    console.log("\n[CSS \uBD84\uC11D] hover\uC640 is-active \uAD00\uB828 \uC2A4\uD0C0\uC77C:");
+    const relevantPatterns = [
+      ".is-active",
+      ":hover",
+      ".has-focus",
+      ".nav-file-title",
+      ".tree-item-self"
+    ];
+    const foundRules = [];
+    const sheets = Array.from(document.styleSheets);
+    for (const sheet of sheets) {
+      try {
+        const rules = sheet.cssRules || sheet.rules;
+        if (!rules)
+          continue;
+        const source = sheet.href || "inline";
+        const ruleArray = Array.from(rules);
+        for (const rule of ruleArray) {
+          if (rule instanceof CSSStyleRule) {
+            const selector = rule.selectorText;
+            const isRelevant = relevantPatterns.some((p) => selector.includes(p));
+            if (isRelevant) {
+              const bgColor = rule.style.backgroundColor;
+              const bg = rule.style.background;
+              if (bgColor || bg) {
+                foundRules.push({
+                  selector,
+                  bg: bgColor || bg,
+                  source: source.split("/").pop() || source
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+      }
+    }
+    foundRules.sort((a, b) => a.selector.localeCompare(b.selector));
+    foundRules.forEach((r) => {
+      console.log(`  [${r.source}] ${r.selector}`);
+      console.log(`    \u2192 ${r.bg}`);
+    });
+    if (foundRules.length === 0) {
+      console.log("  (\uAD00\uB828 CSS \uADDC\uCE59\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC74C - CSS \uBCC0\uC218 \uC0AC\uC6A9 \uAC00\uB2A5\uC131)");
+    }
+    console.log("\n[CSS \uBCC0\uC218] \uBC30\uACBD \uAD00\uB828 \uBCC0\uC218:");
+    const root = document.documentElement;
+    const computedRoot = window.getComputedStyle(root);
+    const bgVars = [
+      "--background-modifier-hover",
+      "--background-modifier-active-hover",
+      "--nav-item-background-hover",
+      "--nav-item-background-active",
+      "--interactive-hover",
+      "--interactive-accent"
+    ];
+    bgVars.forEach((varName) => {
+      const value = computedRoot.getPropertyValue(varName);
+      if (value) {
+        console.log(`  ${varName}: ${value.trim()}`);
+      }
+    });
+  }
+  /**
+   * 4. 워크스페이스 이벤트 추적
+   */
+  setupWorkspaceEventTracking() {
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        var _a, _b;
+        const timestamp = new Date().toISOString().substr(11, 12);
+        console.log(`
+[EVENT: active-leaf-change] ${timestamp}`);
+        if (leaf) {
+          const leafId = this.getLeafDebugId(leaf);
+          const viewType = (_b = (_a = leaf.view) == null ? void 0 : _a.getViewType()) != null ? _b : "null";
+          const filePath = this.getFilePath(leaf);
+          console.log(`  leaf.id: ${leafId}`);
+          console.log(`  viewType: ${viewType}`);
+          console.log(`  filePath: ${filePath != null ? filePath : "null"}`);
+        } else {
+          console.log(`  leaf: null`);
+        }
+        this.logExplorerState("active-leaf-change \uD6C4");
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        const timestamp = new Date().toISOString().substr(11, 12);
+        console.log(`
+[EVENT: layout-change] ${timestamp}`);
+        this.logExplorerState("layout-change \uD6C4");
+      })
+    );
+    console.log("[DEBUG] \uC6CC\uD06C\uC2A4\uD398\uC774\uC2A4 \uC774\uBCA4\uD2B8 \uB9AC\uC2A4\uB108 \uC124\uC815 \uC644\uB8CC");
+  }
+  /**
+   * File Explorer 상태 간단 로깅
+   */
+  logExplorerState(context) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
+    console.log(`  [Explorer \uC0C1\uD0DC] ${context}`);
+    if (explorerView) {
+      console.log(`    activeDom?.file?.path: ${(_d = (_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path) != null ? _d : "null"}`);
+      console.log(`    tree.activeDom?.file?.path: ${(_h = (_g = (_f = (_e = explorerView.tree) == null ? void 0 : _e.activeDom) == null ? void 0 : _f.file) == null ? void 0 : _g.path) != null ? _h : "null"}`);
+      console.log(`    tree.focusedItem?.file?.path: ${(_l = (_k = (_j = (_i = explorerView.tree) == null ? void 0 : _i.focusedItem) == null ? void 0 : _j.file) == null ? void 0 : _k.path) != null ? _l : "null"}`);
+    }
+    const activeEls = document.querySelectorAll(".tree-item-self.is-active, .nav-file-title.is-active");
+    const focusEls = document.querySelectorAll(".tree-item-self.has-focus, .nav-file-title.has-focus");
+    console.log(`    DOM is-active: ${activeEls.length}\uAC1C`);
+    activeEls.forEach((el) => {
+      var _a2;
+      const path = el.getAttribute("data-path") || ((_a2 = el.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
+      console.log(`      - ${path}`);
+    });
+    console.log(`    DOM has-focus: ${focusEls.length}\uAC1C`);
+    focusEls.forEach((el) => {
+      var _a2;
+      const path = el.getAttribute("data-path") || ((_a2 = el.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
+      console.log(`      - ${path}`);
+    });
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+  // 기존 디버깅 함수들
+  // ─────────────────────────────────────────────────────────────────────────
   installPatches() {
     this.patchOpenFile();
     this.patchSetViewState();
@@ -134,54 +403,73 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     this.registerClickHandlers();
     this.registerPromotionTriggers();
   }
-  // ─────────────────────────────────────────────────────────────────────────
-  // 디버깅: File Explorer 상태 출력
-  // ─────────────────────────────────────────────────────────────────────────
+  getNextSequence() {
+    return ++this.eventSequence;
+  }
   /**
-   * File Explorer의 내부 상태와 DOM 상태를 상세히 출력
+   * File Explorer의 내부 상태와 DOM 상태를 상세히 출력 (모두 펼쳐서)
    */
   debugFileExplorerState(context) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    const seq = this.getNextSequence();
+    const timestamp = new Date().toISOString().substr(11, 12);
     console.log(`
-${"=".repeat(60)}`);
-    console.log(`${CONFIG.LOG_PREFIX} DEBUG: ${context}`);
-    console.log(`${"=".repeat(60)}`);
+${"=".repeat(70)}`);
+    console.log(`[${seq}] ${timestamp} | ${CONFIG.LOG_PREFIX} ${context}`);
+    console.log(`${"=".repeat(70)}`);
     const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
     const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
-    console.log("1. File Explorer View \uC874\uC7AC:", !!explorerView);
+    console.log(`[${seq}] 1. File Explorer View \uC874\uC7AC: ${!!explorerView}`);
     if (explorerView) {
       const activeDom = explorerView.activeDom;
-      console.log("2. activeDom:", activeDom);
-      console.log("   activeDom.file:", activeDom == null ? void 0 : activeDom.file);
-      console.log("   activeDom.file?.path:", (_b = activeDom == null ? void 0 : activeDom.file) == null ? void 0 : _b.path);
-      console.log("   activeDom.el:", activeDom == null ? void 0 : activeDom.el);
-      console.log("   activeDom.selfEl:", activeDom == null ? void 0 : activeDom.selfEl);
-      const focusedItem = explorerView.focusedItem;
-      console.log("3. focusedItem:", focusedItem);
-      console.log("   focusedItem?.file?.path:", (_c = focusedItem == null ? void 0 : focusedItem.file) == null ? void 0 : _c.path);
+      console.log(`[${seq}] 2. activeDom \uC0C1\uD0DC:`);
+      console.log(`[${seq}]    - activeDom \uC790\uCCB4: ${activeDom === null ? "null" : activeDom === void 0 ? "undefined" : "object"}`);
+      console.log(`[${seq}]    - activeDom?.file?.path: ${(_c = (_b = activeDom == null ? void 0 : activeDom.file) == null ? void 0 : _b.path) != null ? _c : "\uC5C6\uC74C"}`);
+      console.log(`[${seq}]    - activeDom?.selfEl \uC874\uC7AC: ${!!(activeDom == null ? void 0 : activeDom.selfEl)}`);
+      if (activeDom == null ? void 0 : activeDom.selfEl) {
+        console.log(`[${seq}]    - activeDom.selfEl.className: ${activeDom.selfEl.className}`);
+      }
+      const treeActiveDom = (_d = explorerView.tree) == null ? void 0 : _d.activeDom;
+      console.log(`[${seq}] 2-1. tree.activeDom \uC0C1\uD0DC:`);
+      console.log(`[${seq}]    - tree.activeDom \uC790\uCCB4: ${treeActiveDom === null ? "null" : treeActiveDom === void 0 ? "undefined" : "object"}`);
+      console.log(`[${seq}]    - tree.activeDom?.file?.path: ${(_f = (_e = treeActiveDom == null ? void 0 : treeActiveDom.file) == null ? void 0 : _e.path) != null ? _f : "\uC5C6\uC74C"}`);
+      console.log(`[${seq}]    - activeDom === tree.activeDom: ${activeDom === treeActiveDom}`);
+      const focusedItem = (_g = explorerView.tree) == null ? void 0 : _g.focusedItem;
+      console.log(`[${seq}] 3. tree.focusedItem \uC0C1\uD0DC:`);
+      console.log(`[${seq}]    - focusedItem \uC790\uCCB4: ${focusedItem === null ? "null" : focusedItem === void 0 ? "undefined" : "object"}`);
+      console.log(`[${seq}]    - focusedItem?.file?.path: ${(_i = (_h = focusedItem == null ? void 0 : focusedItem.file) == null ? void 0 : _h.path) != null ? _i : "\uC5C6\uC74C"}`);
     }
     const activeItems = document.querySelectorAll(".nav-file-title.is-active, .tree-item-self.is-active");
-    console.log("4. DOM\uC5D0\uC11C is-active \uD074\uB798\uC2A4 \uAC1C\uC218:", activeItems.length);
-    activeItems.forEach((item, idx) => {
-      var _a2;
-      const path = item.getAttribute("data-path") || ((_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
-      console.log(`   [${idx}] path: ${path}`);
-      console.log(`   [${idx}] classList:`, Array.from(item.classList));
-    });
+    console.log(`[${seq}] 4. DOM is-active \uC694\uC18C (${activeItems.length}\uAC1C):`);
+    if (activeItems.length === 0) {
+      console.log(`[${seq}]    - (\uC5C6\uC74C)`);
+    } else {
+      activeItems.forEach((item, idx) => {
+        var _a2;
+        const path = item.getAttribute("data-path") || ((_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
+        console.log(`[${seq}]    - [${idx}] path: ${path}`);
+        console.log(`[${seq}]    - [${idx}] className: ${item.className}`);
+      });
+    }
     const focusedItems = document.querySelectorAll(".nav-file-title.has-focus, .tree-item-self.has-focus");
-    console.log("5. DOM\uC5D0\uC11C has-focus \uD074\uB798\uC2A4 \uAC1C\uC218:", focusedItems.length);
-    focusedItems.forEach((item, idx) => {
-      var _a2;
-      const path = item.getAttribute("data-path") || ((_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
-      console.log(`   [${idx}] path: ${path}`);
-      console.log(`   [${idx}] classList:`, Array.from(item.classList));
-    });
+    console.log(`[${seq}] 5. DOM has-focus \uC694\uC18C (${focusedItems.length}\uAC1C):`);
+    if (focusedItems.length === 0) {
+      console.log(`[${seq}]    - (\uC5C6\uC74C)`);
+    } else {
+      focusedItems.forEach((item, idx) => {
+        var _a2;
+        const path = item.getAttribute("data-path") || ((_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path"));
+        console.log(`[${seq}]    - [${idx}] path: ${path}`);
+        console.log(`[${seq}]    - [${idx}] className: ${item.className}`);
+      });
+    }
     const activeLeaf = this.getActiveLeaf();
-    console.log("6. \uD604\uC7AC \uD65C\uC131 Leaf:", activeLeaf ? this.getLeafDebugId(activeLeaf) : "null");
-    console.log("   viewType:", (_d = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _d.getViewType());
-    console.log("   filePath:", activeLeaf ? this.getFilePath(activeLeaf) : "null");
-    console.log("   isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
-    console.log("7. \uC5F4\uB9B0 \uBAA8\uB4E0 \uD0ED:");
+    console.log(`[${seq}] 6. \uD604\uC7AC \uD65C\uC131 Leaf:`);
+    console.log(`[${seq}]    - leaf id: ${activeLeaf ? this.getLeafDebugId(activeLeaf) : "null"}`);
+    console.log(`[${seq}]    - viewType: ${(_k = (_j = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _j.getViewType()) != null ? _k : "null"}`);
+    console.log(`[${seq}]    - filePath: ${activeLeaf ? this.getFilePath(activeLeaf) : "null"}`);
+    console.log(`[${seq}]    - isPreview: ${activeLeaf ? this.previewLeaves.has(activeLeaf) : false}`);
+    console.log(`[${seq}] 7. \uBA54\uC778 \uC601\uC5ED \uC5F4\uB9B0 \uD0ED:`);
     let tabIndex = 0;
     this.app.workspace.iterateAllLeaves((leaf) => {
       var _a2;
@@ -190,11 +478,14 @@ ${"=".repeat(60)}`);
         const filePath = this.getFilePath(leaf);
         const viewType = (_a2 = leaf.view) == null ? void 0 : _a2.getViewType();
         const isPreview = this.previewLeaves.has(leaf);
-        console.log(`   [${tabIndex}] id: ${this.getLeafDebugId(leaf)}, type: ${viewType}, path: ${filePath}, preview: ${isPreview}`);
+        console.log(`[${seq}]    - [${tabIndex}] id=${this.getLeafDebugId(leaf)}, type=${viewType}, path=${filePath}, preview=${isPreview}`);
         tabIndex++;
       }
     });
-    console.log(`${"=".repeat(60)}
+    if (tabIndex === 0) {
+      console.log(`[${seq}]    - (\uC5F4\uB9B0 \uD0ED \uC5C6\uC74C)`);
+    }
+    console.log(`${"=".repeat(70)}
 `);
   }
   // ─────────────────────────────────────────────────────────────────────────
@@ -225,11 +516,6 @@ ${"=".repeat(60)}`);
   // ─────────────────────────────────────────────────────────────────────────
   // 위치 판단 (사용자 멘탈 모델 기반)
   // ─────────────────────────────────────────────────────────────────────────
-  /**
-   * Leaf가 사이드바에 있는지 판단
-   * - 사용자 관점: "왼쪽/오른쪽 패널"
-   * - 구현 세부사항(file-explorer, bookmarks 등)에 의존하지 않음
-   */
   getLeafLocation(leaf) {
     const workspace = this.app.workspace;
     const root = leaf.getRoot();
@@ -244,11 +530,6 @@ ${"=".repeat(60)}`);
   // ─────────────────────────────────────────────────────────────────────────
   // 의도 판별
   // ─────────────────────────────────────────────────────────────────────────
-  /**
-   * 파일 열기 의도 판별
-   * - create: 새 노트 생성, Daily Note 등 → Permanent
-   * - browse: 탐색 목적 → Preview
-   */
   determineOpenIntent(file, openState) {
     var _a, _b;
     if (((_a = openState == null ? void 0 : openState.eState) == null ? void 0 : _a.rename) === "all") {
@@ -264,9 +545,6 @@ ${"=".repeat(60)}`);
   // ─────────────────────────────────────────────────────────────────────────
   // Leaf 탐색
   // ─────────────────────────────────────────────────────────────────────────
-  /**
-   * 같은 탭 그룹 내에서 특정 파일이 열린 탭 찾기
-   */
   findLeafWithFile(filePath, inSameGroupAs) {
     const siblings = this.getSiblingLeaves(inSameGroupAs);
     for (const sibling of siblings) {
@@ -276,9 +554,6 @@ ${"=".repeat(60)}`);
     }
     return null;
   }
-  /**
-   * 같은 탭 그룹 내에서 특정 뷰 타입이 열린 탭 찾기
-   */
   findLeafWithViewType(viewType, inSameGroupAs) {
     var _a;
     const siblings = this.getSiblingLeaves(inSameGroupAs);
@@ -289,9 +564,6 @@ ${"=".repeat(60)}`);
     }
     return null;
   }
-  /**
-   * 같은 탭 그룹 내에서 Preview 탭 찾기
-   */
   findPreviewLeaf(inSameGroupAs) {
     const siblings = this.getSiblingLeaves(inSameGroupAs);
     for (const sibling of siblings) {
@@ -301,9 +573,6 @@ ${"=".repeat(60)}`);
     }
     return null;
   }
-  /**
-   * 같은 탭 그룹의 형제 탭들 가져오기
-   */
   getSiblingLeaves(leaf) {
     var _a;
     const internal = leaf;
@@ -341,12 +610,11 @@ ${"=".repeat(60)}`);
     log("Patched openFile");
   }
   async handleOpenFile(leaf, file, openState, originalMethod) {
+    const seq = this.getNextSequence();
     console.log(`
-${"-".repeat(40)}`);
-    console.log(`${CONFIG.LOG_PREFIX} handleOpenFile \uC9C4\uC785`);
-    console.log(`  file.path: ${file.path}`);
-    console.log(`  leaf.id: ${this.getLeafDebugId(leaf)}`);
-    this.debugFileExplorerState("handleOpenFile \uC9C4\uC785 \uC2DC\uC810");
+[${seq}] \u25B6\u25B6\u25B6 handleOpenFile \uC2DC\uC791: ${file.path}`);
+    console.log(`[${seq}]     leaf.id: ${this.getLeafDebugId(leaf)}`);
+    this.debugFileExplorerState(`handleOpenFile \uC9C4\uC785 - ${file.path}`);
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
       openState = openState || {};
@@ -357,48 +625,51 @@ ${"-".repeat(40)}`);
     const intent = this.determineOpenIntent(file, openState);
     const isCtrlClick = this.consumeCtrlClickFlag();
     const shouldBePermanent = intent === "create" || isCtrlClick;
-    log(`openFile: ${file.path}`);
-    log(`  state=${currentState}, intent=${intent}, permanent=${shouldBePermanent}`);
+    console.log(`[${seq}]     state=${currentState}, intent=${intent}, permanent=${shouldBePermanent}`);
     if (this.getFilePath(leaf) === file.path) {
-      log("  \u2192 Same file, skipping");
+      console.log(`[${seq}]     \u2192 Same file, skipping`);
       return;
     }
     const existingLeaf = this.findLeafWithFile(file.path, leaf);
     if (existingLeaf && intent === "browse" && !isCtrlClick) {
-      log("  \u2192 Already open, focusing existing tab");
+      console.log(`[${seq}]     \u2192 Already open, focusing existing tab`);
       this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
       return;
     }
     if (shouldBePermanent) {
       if (currentState === "permanent" || currentState === "preview") {
+        console.log(`[${seq}]     \u2192 Opening in new tab (permanent)`);
         const result3 = await this.openInNewTab(leaf, file, openState, true, originalMethod);
-        this.debugFileExplorerState("openInNewTab (permanent) \uC644\uB8CC \uD6C4");
+        this.debugFileExplorerState(`handleOpenFile \uC644\uB8CC (new tab permanent) - ${file.path}`);
         return result3;
       }
+      console.log(`[${seq}]     \u2192 Opening in current tab (permanent)`);
       this.markAsProcessed(leaf);
       const result2 = await originalMethod.call(leaf, file, openState);
       this.setAsPermanent(leaf);
-      this.debugFileExplorerState("Empty \u2192 Permanent \uC644\uB8CC \uD6C4");
+      this.debugFileExplorerState(`handleOpenFile \uC644\uB8CC (current tab permanent) - ${file.path}`);
       return result2;
     }
     const existingPreview = this.findPreviewLeaf(leaf);
     if (existingPreview) {
-      log("  \u2192 Reusing existing preview tab");
+      console.log(`[${seq}]     \u2192 Reusing existing preview tab`);
       this.markAsProcessed(existingPreview);
       const result2 = await originalMethod.call(existingPreview, file, openState);
       this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
-      this.debugFileExplorerState("Preview \uC7AC\uC0AC\uC6A9 \uC644\uB8CC \uD6C4");
+      this.debugFileExplorerState(`handleOpenFile \uC644\uB8CC (reuse preview) - ${file.path}`);
       return result2;
     }
     if (currentState === "permanent") {
+      console.log(`[${seq}]     \u2192 Opening in new tab (preview)`);
       const result2 = await this.openInNewTab(leaf, file, openState, false, originalMethod);
-      this.debugFileExplorerState("openInNewTab (preview) \uC644\uB8CC \uD6C4");
+      this.debugFileExplorerState(`handleOpenFile \uC644\uB8CC (new tab preview) - ${file.path}`);
       return result2;
     }
+    console.log(`[${seq}]     \u2192 Opening in current tab (preview)`);
     this.markAsProcessed(leaf);
     const result = await originalMethod.call(leaf, file, openState);
     this.setAsPreview(leaf);
-    this.debugFileExplorerState("Empty/Preview \u2192 Preview \uC644\uB8CC \uD6C4");
+    this.debugFileExplorerState(`handleOpenFile \uC644\uB8CC (current tab preview) - ${file.path}`);
     return result;
   }
   async openInNewTab(_fromLeaf, file, openState, asPermanent, originalMethod) {
@@ -418,10 +689,6 @@ ${"-".repeat(40)}`);
     }
     return result;
   }
-  /**
-   * 제목편집모드 수동 적용
-   * - 새 탭에서 파일을 열 때 eState.rename이 무시되는 문제 해결
-   */
   applyRenameMode(leaf) {
     const view = leaf.view;
     if (view == null ? void 0 : view.setEphemeralState) {
@@ -525,16 +792,16 @@ ${"-".repeat(40)}`);
         return function() {
           const filePath = plugin.getFilePath(this);
           const leafId = plugin.getLeafDebugId(this);
+          const seq = plugin.getNextSequence();
           console.log(`
-${"-".repeat(40)}`);
-          console.log(`${CONFIG.LOG_PREFIX} detach \uC9C4\uC785`);
-          console.log(`  \uB2EB\uD788\uB294 \uD0ED leaf.id: ${leafId}`);
-          console.log(`  \uB2EB\uD788\uB294 \uD0ED filePath: ${filePath}`);
-          plugin.debugFileExplorerState("detach \uC9C4\uC785 \uC2DC\uC810 (clearAllSidebarSelections \uD638\uCD9C \uC804)");
+[${seq}] \u25B6\u25B6\u25B6 detach \uC2DC\uC791`);
+          console.log(`[${seq}]     \uB2EB\uD788\uB294 \uD0ED leaf.id: ${leafId}`);
+          console.log(`[${seq}]     \uB2EB\uD788\uB294 \uD0ED filePath: ${filePath}`);
+          plugin.debugFileExplorerState(`detach \uC9C4\uC785 (clearAllSidebarSelections \uC804)`);
           plugin.clearAllSidebarSelections();
-          plugin.debugFileExplorerState("clearAllSidebarSelections \uD638\uCD9C \uD6C4");
+          plugin.debugFileExplorerState(`clearAllSidebarSelections \uC644\uB8CC`);
           const result = original.call(this);
-          plugin.debugFileExplorerState("original detach \uC644\uB8CC \uD6C4");
+          plugin.debugFileExplorerState(`original detach \uC644\uB8CC`);
           return result;
         };
       }
@@ -583,16 +850,15 @@ ${"-".repeat(40)}`);
   registerFileOpenHandler() {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        var _a, _b;
+        var _a, _b, _c;
+        const seq = this.getNextSequence();
         console.log(`
-${"-".repeat(40)}`);
-        console.log(`${CONFIG.LOG_PREFIX} file-open \uC774\uBCA4\uD2B8`);
-        console.log(`  file: ${(_a = file == null ? void 0 : file.path) != null ? _a : "null"}`);
-        this.debugFileExplorerState("file-open \uC774\uBCA4\uD2B8 \uBC1C\uC0DD");
+[${seq}] \u25C6\u25C6\u25C6 file-open \uC774\uBCA4\uD2B8: ${(_a = file == null ? void 0 : file.path) != null ? _a : "null"}`);
+        this.debugFileExplorerState(`file-open \uC774\uBCA4\uD2B8 - ${(_b = file == null ? void 0 : file.path) != null ? _b : "null"}`);
         if (!file)
           return;
         const activeLeaf = this.getActiveLeaf();
-        if (((_b = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _b.getViewType()) === "markdown") {
+        if (((_c = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _c.getViewType()) === "markdown") {
           this.lastActiveLeaf = activeLeaf;
         }
       })
@@ -619,12 +885,11 @@ ${"-".repeat(40)}`);
       const fileEl = target.closest("[data-path]");
       if (fileEl) {
         const path = fileEl.getAttribute("data-path");
+        const seq = this.getNextSequence();
         console.log(`
-${"-".repeat(40)}`);
-        console.log(`${CONFIG.LOG_PREFIX} \uD30C\uC77C \uC694\uC18C \uD074\uB9AD`);
-        console.log(`  \uD074\uB9AD\uB41C \uD30C\uC77C path: ${path}`);
-        console.log(`  Ctrl/Meta \uD0A4: ${evt.ctrlKey || evt.metaKey}`);
-        this.debugFileExplorerState("\uD30C\uC77C \uC694\uC18C \uD074\uB9AD \uC2DC\uC810");
+[${seq}] \u25CF \uD30C\uC77C \uC694\uC18C \uC2F1\uAE00\uD074\uB9AD: ${path}`);
+        console.log(`[${seq}]   Ctrl/Meta: ${evt.ctrlKey || evt.metaKey}`);
+        this.debugFileExplorerState(`\uC2F1\uAE00\uD074\uB9AD - ${path}`);
       }
       if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
         this.isCtrlClickPending = true;
@@ -635,30 +900,19 @@ ${"-".repeat(40)}`);
       const fileEl = target.closest("[data-path]");
       if (fileEl) {
         const path = fileEl.getAttribute("data-path");
+        const seq = this.getNextSequence();
         console.log(`
-${"-".repeat(40)}`);
-        console.log(`${CONFIG.LOG_PREFIX} \uD30C\uC77C \uC694\uC18C \uB354\uBE14\uD074\uB9AD`);
-        console.log(`  \uB354\uBE14\uD074\uB9AD\uB41C \uD30C\uC77C path: ${path}`);
-        this.debugFileExplorerState("\uD30C\uC77C \uC694\uC18C \uB354\uBE14\uD074\uB9AD \uC2DC\uC810");
+[${seq}] \u25CF\u25CF \uD30C\uC77C \uC694\uC18C \uB354\uBE14\uD074\uB9AD: ${path}`);
+        this.debugFileExplorerState(`\uB354\uBE14\uD074\uB9AD - ${path}`);
       }
       this.handleDoubleClick(evt);
     }, true);
     this.registerDomEvent(document, "mousedown", (evt) => {
       var _a;
-      const target = evt.target;
       const activeLeaf = this.getActiveLeaf();
       const viewType = (_a = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _a.getViewType();
       if (viewType === "graph") {
-        const leafId = activeLeaf ? this.getLeafDebugId(activeLeaf) : "null";
-        console.log("[IDE Preview] mousedown debug:");
-        console.log("  leafId:", leafId);
-        console.log("  target.tagName:", target.tagName);
-        console.log("  activeLeaf viewType:", viewType);
-        console.log("  isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
-      }
-      if (viewType === "graph") {
         this.graphDragStartPos = { x: evt.clientX, y: evt.clientY };
-        console.log("[IDE Preview] graphDragStartPos set:", this.graphDragStartPos);
       }
     }, true);
     this.registerDomEvent(document, "mouseup", (evt) => {
@@ -667,16 +921,10 @@ ${"-".repeat(40)}`);
         return;
       const activeLeaf = this.getActiveLeaf();
       const viewType = (_a = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _a.getViewType();
-      const leafId = activeLeaf ? this.getLeafDebugId(activeLeaf) : "null";
-      console.log("[IDE Preview] mouseup debug:");
-      console.log("  leafId:", leafId);
-      console.log("  viewType:", viewType);
       if (viewType === "graph") {
         const dx = evt.clientX - this.graphDragStartPos.x;
         const dy = evt.clientY - this.graphDragStartPos.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        console.log("  drag distance:", distance);
-        console.log("  isPreview:", activeLeaf ? this.previewLeaves.has(activeLeaf) : false);
         if (distance > 10) {
           if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
             log("Graph drag detected \u2192 promote");
@@ -688,7 +936,7 @@ ${"-".repeat(40)}`);
     }, true);
   }
   handleDoubleClick(evt) {
-    var _a, _b, _c;
+    var _a, _b;
     const target = evt.target;
     if (target.closest(".workspace-tab-header")) {
       const activeLeaf = this.getActiveLeaf();
@@ -720,11 +968,8 @@ ${"-".repeat(40)}`);
     if (ribbonButton) {
       const ariaLabel = (_a = ribbonButton.getAttribute("aria-label")) != null ? _a : "";
       const activeLeaf = this.getActiveLeaf();
-      const activeViewType = (_b = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _b.getViewType();
       log("Ribbon button double-click");
       log(`  aria-label: "${ariaLabel}"`);
-      log(`  activeLeaf viewType: ${activeViewType}`);
-      log(`  isPreview: ${activeLeaf ? this.previewLeaves.has(activeLeaf) : false}`);
       if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
         log(`  \u2192 Promoting active preview tab`);
         this.promoteToPermament(activeLeaf);
@@ -738,10 +983,10 @@ ${"-".repeat(40)}`);
         viewType = "canvas";
       }
       if (viewType) {
-        const activeLeaf2 = this.getActiveLeaf();
-        if (((_c = activeLeaf2 == null ? void 0 : activeLeaf2.view) == null ? void 0 : _c.getViewType()) === viewType && this.previewLeaves.has(activeLeaf2)) {
+        const currentActiveLeaf = this.getActiveLeaf();
+        if (((_b = currentActiveLeaf == null ? void 0 : currentActiveLeaf.view) == null ? void 0 : _b.getViewType()) === viewType && this.previewLeaves.has(currentActiveLeaf)) {
           log(`  \u2192 Promoting existing ${viewType} view`);
-          this.promoteToPermament(activeLeaf2);
+          this.promoteToPermament(currentActiveLeaf);
           return;
         }
       }
@@ -837,40 +1082,42 @@ ${"-".repeat(40)}`);
       tabHeaderEl == null ? void 0 : tabHeaderEl.classList.remove(CONFIG.CSS_CLASSES.PREVIEW_TAB);
     });
   }
-  // ─────────────────────────────────────────────────────────────────────────
-  // 사이드바 선택 상태 정리
-  // ─────────────────────────────────────────────────────────────────────────
   /**
-   * 사이드바의 모든 파일 선택 상태 해제 (SPEC 7.5)
-   * - 탭이 닫힐 때 호출
-   * - DOM 클래스만 제거
+   * 사이드바의 파일 선택 상태 초기화
    */
   clearAllSidebarSelections() {
-    var _a, _b, _c;
-    log("=== clearAllSidebarSelections ===");
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x;
+    const seq = this.getNextSequence();
+    console.log(`
+[${seq}] \u25C7\u25C7\u25C7 clearAllSidebarSelections \uC2E4\uD589`);
     const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
     const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
-    if (explorerView) {
-      console.log("  clearAllSidebarSelections \uB0B4\uBD80:");
-      console.log("    explorerView.activeDom:", explorerView.activeDom);
-      console.log("    explorerView.activeDom?.file?.path:", (_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path);
+    if (!explorerView) {
+      console.log(`[${seq}]   \u2192 explorerView \uC5C6\uC74C, \uC2A4\uD0B5`);
+      return;
     }
-    const sidebars = document.querySelectorAll(
-      ".workspace-split.mod-left-split, .workspace-split.mod-right-split"
-    );
-    sidebars.forEach((sidebar) => {
-      const activeItems = sidebar.querySelectorAll(
-        ".tree-item-self.is-active, .tree-item-self.has-focus"
-      );
-      console.log(`    sidebar\uC5D0\uC11C \uCC3E\uC740 active/focus \uC694\uC18C \uC218: ${activeItems.length}`);
-      activeItems.forEach((item) => {
-        var _a2;
-        const path = (_a2 = item.closest("[data-path]")) == null ? void 0 : _a2.getAttribute("data-path");
-        console.log(`      \uC81C\uAC70 \uB300\uC0C1: ${path}`);
-        item.classList.remove("is-active");
-        item.classList.remove("has-focus");
-      });
-    });
+    console.log(`[${seq}]   [BEFORE] explorerView.activeDom?.file?.path: ${(_d = (_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path) != null ? _d : "null"}`);
+    console.log(`[${seq}]   [BEFORE] tree.activeDom?.file?.path: ${(_h = (_g = (_f = (_e = explorerView.tree) == null ? void 0 : _e.activeDom) == null ? void 0 : _f.file) == null ? void 0 : _g.path) != null ? _h : "null"}`);
+    console.log(`[${seq}]   [BEFORE] tree.focusedItem?.file?.path: ${(_l = (_k = (_j = (_i = explorerView.tree) == null ? void 0 : _i.focusedItem) == null ? void 0 : _j.file) == null ? void 0 : _k.path) != null ? _l : "null"}`);
+    if (explorerView.onFileOpen) {
+      console.log(`[${seq}]   \u2192 onFileOpen(null) \uD638\uCD9C`);
+      explorerView.onFileOpen(null);
+    }
+    if ((_m = explorerView.tree) == null ? void 0 : _m.setFocusedItem) {
+      console.log(`[${seq}]   \u2192 tree.setFocusedItem(null) \uD638\uCD9C`);
+      explorerView.tree.setFocusedItem(null);
+    }
+    if (explorerView.tree && explorerView.tree.activeDom !== null) {
+      console.log(`[${seq}]   \u2192 tree.activeDom = null \uC124\uC815`);
+      explorerView.tree.activeDom = null;
+    }
+    console.log(`[${seq}]   [AFTER] explorerView.activeDom?.file?.path: ${(_p = (_o = (_n = explorerView.activeDom) == null ? void 0 : _n.file) == null ? void 0 : _o.path) != null ? _p : "null"}`);
+    console.log(`[${seq}]   [AFTER] tree.activeDom?.file?.path: ${(_t = (_s = (_r = (_q = explorerView.tree) == null ? void 0 : _q.activeDom) == null ? void 0 : _r.file) == null ? void 0 : _s.path) != null ? _t : "null"}`);
+    console.log(`[${seq}]   [AFTER] tree.focusedItem?.file?.path: ${(_x = (_w = (_v = (_u = explorerView.tree) == null ? void 0 : _u.focusedItem) == null ? void 0 : _v.file) == null ? void 0 : _w.path) != null ? _x : "null"}`);
+    const activeItems = document.querySelectorAll(".tree-item-self.is-active");
+    const focusedItems = document.querySelectorAll(".tree-item-self.has-focus");
+    console.log(`[${seq}]   [AFTER DOM] is-active \uAC1C\uC218: ${activeItems.length}`);
+    console.log(`[${seq}]   [AFTER DOM] has-focus \uAC1C\uC218: ${focusedItems.length}`);
   }
   // ─────────────────────────────────────────────────────────────────────────
   // 유틸리티
@@ -886,7 +1133,6 @@ ${"-".repeat(40)}`);
     var _a;
     return (_a = leaf.id) != null ? _a : "unknown";
   }
-  /** activeLeaf의 대체 (deprecated 회피) */
   getActiveLeaf() {
     return this.app.workspace.getMostRecentLeaf();
   }

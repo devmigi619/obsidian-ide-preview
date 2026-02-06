@@ -1,161 +1,25 @@
-# IDE-style Preview Plugin - 동작 명세서
+# Smart Tabs 기능 명세서
 
-## 개요
-VS Code 스타일의 Preview 탭 동작을 Obsidian에 구현한 플러그인입니다.
+## 1. 개요
 
-### 핵심 개념
-| 탭 상태 | 설명 | 시각적 표시 |
-|---|---|---|
+**Smart Tabs**는 VS Code 스타일의 탭 동작을 Obsidian에 구현한 플러그인입니다. 파일을 탐색할 때는 탭이 쌓이지 않고, 명시적으로 열거나 편집할 때만 새 탭이 생성됩니다.
+
+### 탭 상태
+
+| 상태 | 설명 | 시각적 표시 |
+|------|------|-------------|
 | **Empty** | 빈 탭 (아무것도 열리지 않음) | - |
-| **Preview** | 임시 탭, 다른 파일 열면 재사용됨 | 탭 제목 *이탤릭* |
-| **Permanent** | 일반 탭, 명시적으로 닫기 전까지 유지 | 탭 제목 일반 |
-
-### 동작 원칙
-1. **탐색은 Preview**: 파일을 둘러볼 때는 탭이 쌓이지 않음
-2. **의도가 명확하면 Permanent**: 더블클릭, 편집, 생성 등
-3. **패널당 Preview 1개**: 같은 패널 내에서 Preview 탭은 재사용됨
-4. **Permanent 보존**: Permanent 탭에서 다른 파일 열면 새 탭에서 열림
+| **Preview** | 임시 탭, 다른 파일을 열면 재사용됨 | 탭 제목 *이탤릭* |
+| **Permanent** | 고정 탭, 명시적으로 닫기 전까지 유지 | 탭 제목 일반 |
 
 ---
-## 1. 표준 탐색 동작
-다음 기능들은 모두 동일한 탐색 동작을 따릅니다.
 
-**적용 대상:**
-- 파일 탐색기 싱글 클릭
-- Quick Switcher (Ctrl+O)
-- 북마크 클릭
-- 검색 결과 클릭
-- 그래프 뷰 열기 / 노드 클릭
-- 위키링크 클릭
-- Backlinks / Outgoing Links 패널 클릭
-- 최근 파일 / 무작위 노트
-- Canvas / PDF 열기
+## 2. 공통(전역) 규칙
 
-**동작 규칙:**
+모든 동작에 공통으로 적용되는 규칙입니다.
 
-| 현재 탭 | 동작 |
-|---|---|
-| Empty | 해당 탭에 **Preview**로 열기 |
-| Permanent | 기존 Preview 탭 재사용, 없으면 새 Preview 탭 생성 |
-| Preview | 해당 탭에서 **Preview**로 교체 |
+### 패널당 Preview 1개
 
-> **중복 열기 방지**: 이미 열린 파일/뷰를 클릭하면 기존 탭으로 포커스 이동
-
----
-## 2. 테스트 체크리스트
-각 기능별 테스트 시 확인할 항목입니다.
-
-### 2.1 파일 탐색기 (File Explorer)
-- [x] 싱글 클릭 → 표준 탐색 동작
-- [ ] 더블 클릭 → Permanent로 열기/승격
-- [x] 이미 열린 파일 클릭 → 포커스 이동
-
-### 2.2 Quick Switcher (Ctrl+O)
-- [x] 파일 선택 → 표준 탐색 동작
-
-### 2.3 북마크 (Bookmarks)
-- [x] 싱글 클릭 → 표준 탐색 동작
-- [ ] 더블 클릭 → Permanent로 승격
-
-### 2.4 검색 결과 (File Search)
-- [x] 싱글 클릭 → 표준 탐색 동작
-- [ ] 더블 클릭 → Permanent로 승격
-
-### 2.5 그래프 뷰 (Graph View)
-- [x] 빈 탭에서 그래프 뷰 실행 → Preview로 열기
-- [x] Permanent 탭에서 그래프 뷰 실행 → 기존 Preview 재사용 또는 새 Preview 생성
-- [x] Preview 탭에서 그래프 뷰 실행 → 해당 탭에서 그래프 뷰로 교체
-- [x] Preview 그래프뷰에서 노드 클릭 → 해당 탭에서 노트로 교체
-- [x] Permanent 그래프뷰에서 노드 클릭 → 기존 Preview 재사용 또는 새 Preview 생성
-- [x] 이미 열린 그래프뷰 다시 실행 → 기존 탭으로 포커스 이동 (중복 방지)
-
-### 2.6 링크 클릭
-- [x] 위키링크 클릭 → 표준 탐색 동작
-- [x] Backlinks 패널 클릭 → 표준 탐색 동작
-- [x] Outgoing Links 패널 클릭 → 표준 탐색 동작
-
-### 2.7 최근 파일 / 무작위 노트
-- [ ] 클릭 → 표준 탐색 동작
-
-### 2.8 Canvas / PDF
-- [ ] Canvas 열기 → 표준 탐색 동작
-- [ ] Canvas 편집 → Permanent로 승격
-- [ ] PDF 열기 → 표준 탐색 동작 (읽기 전용, 승격 없음)
-
----
-## 3. 더블 클릭 동작
-명시적으로 파일을 열겠다는 의도입니다.
-
-| 현재 탭 | 동작 |
-|---|---|
-| Empty | 해당 탭에 **Permanent**로 열기 |
-| Permanent | 보존 → 새 **Permanent** 탭 생성 |
-| Preview (다른 파일) | 해당 탭에서 **Permanent**로 교체 |
-| Preview (같은 파일) | **Permanent**로 승격 |
-
-**적용 위치:**
-- 파일 탐색기
-- 북마크
-- 검색 결과
-- 탭 헤더
-
-> **참고**: 그래프 뷰 노드 더블클릭은 Obsidian 구조상 지원되지 않음
-
----
-## 4. 새 노트 생성
-새 콘텐츠를 생성하는 동작은 항상 **Permanent**로 열립니다.
-
-### 4.1 리본 버튼 / Ctrl+N / 우클릭 → 새 노트
-| 현재 탭 | 동작 |
-|---|---|
-| Empty | 해당 탭에 **Permanent**로 생성 + 제목 편집모드 |
-| Permanent | 보존 → 새 **Permanent** 탭 생성 + 제목 편집모드 |
-| Preview | **보존 (승격 안 함)** → 새 **Permanent** 탭 생성 + 제목 편집모드 |
-
-> **참고**: 새 노트 생성 시 기존 Preview 탭은 승격되지 않고 그대로 유지됩니다.
-
-### 4.2 Unique Note Creator
-| 현재 탭 | 동작 |
-|---|---|
-| Empty | 해당 탭에 **Permanent**로 생성 + 제목 편집모드 |
-| Permanent | 보존 → 새 **Permanent** 탭 생성 + 제목 편집모드 |
-| Preview | **보존** → 새 **Permanent** 탭 생성 + 제목 편집모드 |
-
----
-## 5. Daily Notes
-Daily Notes는 생성/열기 모두 **Permanent**로 처리됩니다.
-
-| 현재 탭 | 동작 |
-|---|---|
-| Empty | 해당 탭에 **Permanent**로 열기/생성 |
-| Permanent | 보존 → 새 **Permanent** 탭 생성 |
-| Preview | **보존** → 새 **Permanent** 탭 생성 |
-
-> **판별 기준**: Daily Notes 플러그인의 설정(날짜 포맷, 저장 경로)을 참조하여 판별
-
----
-## 6. 승격 트리거 (Preview → Permanent)
-다음 동작이 발생하면 Preview 탭이 자동으로 Permanent로 승격됩니다.
-
-| 트리거 | 설명 |
-|---|---|
-| **본문 편집** | 에디터에서 첫 글자 입력 시 |
-| **인라인 제목 편집** | 노트 상단 제목 수정 시 (300ms debounce) |
-| **파일 이름 변경** | vault의 rename 이벤트 발생 시 |
-| **Canvas 편집** | 노드 추가/수정/삭제, 연결선 변경 시 |
-| **탭 헤더 더블 클릭** | 탭 제목 영역을 더블 클릭 |
-| **사이드바 더블 클릭** | 파일 탐색기, 북마크, 검색 결과 등에서 더블 클릭 |
-
-> **참고**: PDF는 읽기 전용이므로 승격 트리거가 없습니다.
-
----
-## 7. 전역 동작 규칙
-### 7.1 중복 열기 방지
-같은 패널 내에서 이미 열려있는 파일/뷰를 클릭하면 새 탭을 만들지 않고 기존 탭으로 포커스가 이동합니다.
-- 파일: 같은 경로의 파일이 열려있으면 포커스 이동
-- 비파일 뷰(그래프 등): 같은 뷰 타입이 열려있으면 포커스 이동
-
-### 7.2 패널당 Preview 1개
 같은 패널(탭 그룹) 내에서는 Preview 탭이 최대 1개만 존재합니다.
 
 **Preview로 파일을 열어야 할 때:**
@@ -164,72 +28,185 @@ Daily Notes는 생성/열기 모두 **Permanent**로 처리됩니다.
    - 현재 탭이 Empty → 해당 탭에 Preview로 열기
    - 현재 탭이 Permanent → 새 Preview 탭 생성
 
-> **참고**: 빈 탭이 있어도 기존 Preview 탭을 재사용합니다 (빈 탭에서 기존 Preview를 승격시키지 않음)
+### 중복 열기 방지
 
-### 7.3 Ctrl/Cmd + Click
-Obsidian 기본 동작을 따릅니다. (새 탭/새 패널에서 열기 등)
+같은 패널 내에서 이미 열려있는 파일이나 뷰를 다시 클릭하면 새 탭을 만들지 않고 기존 탭으로 포커스 이동:
+- **파일**: 같은 경로의 파일이 열려있으면 포커스 이동
+- **비파일 뷰**: 같은 뷰 타입(그래프, Canvas 등)이 열려있으면 포커스 이동
 
-### 7.4 포커스 자동 이동
-새 탭이 생성되면 자동으로 해당 탭으로 포커스가 이동합니다.
+### Modifier Key 동작
 
-### 7.5 탭 닫기 시 탐색기 정리
-더블클릭으로 열었던 파일의 탭을 닫으면:
-- 파일 탐색기의 `activeDom` 상태 정리
-- DOM 클래스 (`is-active`, `has-focus`) 제거
+Obsidian의 기본 동작을 따릅니다:
+- **Ctrl/Cmd + Click**: 새 탭에서 열기
 
----
-## 8. 향후 구현 예정
-| 기능 | 설명 |
-|---|---|
-| 리본 버튼 더블클릭 | 그래프 뷰 등 리본 버튼 더블클릭 시 Permanent로 열기 |
-| 그래프 뷰 조작 승격 | 그래프 내 클릭앤드래그 시 Permanent로 승격 |
-| 탭 드래그 (패널 이동) | 다른 패널로 드래그 시 Permanent로 승격 |
-| 탭 고정 (Pin) | 고정 시 Permanent로 승격 |
+### 포커스 관리
+
+- 새 탭이 생성되면 자동으로 해당 탭으로 포커스 이동
+- 탭을 닫으면 파일 탐색기의 활성 상태(`activeDom`, `has-focus` 클래스 등) 자동 정리
 
 ---
-## 기술 구현 요약
-### 상태 판별
-```typescript
-type TabState = "empty" | "preview" | "permanent";
 
-function getTabState(leaf): TabState {
-  if (leaf.view?.getViewType() === "empty") return "empty";
-  if (previewLeaves.has(leaf)) return "preview";
-  return "permanent";
-}
-```
+## 3. 패턴별 규칙
 
-### 위치 판별 (사용자 멘탈 모델 기반)
-```typescript
-// 사이드바 vs 메인 영역을 위치로 판단
-// 뷰 타입(file-explorer, bookmarks 등)에 의존하지 않음
-function getLeafLocation(leaf): "sidebar" | "main" {
-  const root = leaf.getRoot();
-  if (root === workspace.leftSplit || root === workspace.rightSplit) {
-    return "sidebar";
-  }
-  return "main";
-}
-```
+### Browse 패턴 (표준 탐색)
 
-### 의도 판별
-```typescript
-type OpenIntent = "browse" | "create";
+파일을 둘러보는 동작입니다. **Preview 모드**로 열립니다.
 
-function determineOpenIntent(file, openState): OpenIntent {
-  // 새 노트 생성 (제목 편집모드)
-  if (openState?.eState?.rename === "all") return "create";
+| 현재 탭 상태 | 동작 |
+|-------------|------|
+| **Empty** | 해당 탭에 **Preview**로 열기 |
+| **Permanent** | 기존 Preview 탭 재사용, 없으면 새 Preview 탭 생성 |
+| **Preview** | 해당 탭에서 **Preview**로 교체 |
 
-  // Daily Notes - 플러그인 설정 참조
-  if (isDailyNote(file)) return "create";
+### Open 패턴 (명시적 열기)
 
-  return "browse";
-}
-```
+명시적으로 파일을 열겠다는 의도입니다. **더블클릭**으로 트리거됩니다.
 
-### 패치 포인트
-| 메서드 | 역할 |
-|---|---|
-| `WorkspaceLeaf.openFile` | 파일 열기 시 Preview/Permanent 결정 |
-| `WorkspaceLeaf.setViewState` | 비파일 뷰(Graph, Canvas 등) 처리 |
-| `WorkspaceLeaf.detach` | 탭 닫힘 시 정리 |
+| 현재 탭 상태 | 동작 |
+|-------------|------|
+| **Empty** | 해당 탭에 **Permanent**로 열기 |
+| **Permanent** | 보존 → 새 **Permanent** 탭 생성 |
+| **Preview** (다른 파일) | 해당 탭에서 **Permanent**로 교체 |
+| **Preview** (같은 파일) | **Permanent**로 승격 |
+
+### Create 패턴 (파일 생성)
+
+새 파일을 생성하는 동작입니다. 항상 **Permanent 탭**으로 열립니다.
+
+| 현재 탭 상태 | 동작 |
+|-------------|------|
+| **Empty** | 해당 탭에 **Permanent**로 생성 |
+| **Permanent** | 보존 → 새 **Permanent** 탭 생성 |
+| **Preview** | 보존 → 새 **Permanent** 탭 생성 |
+
+### Promote 패턴 (자동 승격)
+
+다음 트리거 발생 시 Preview 탭이 자동으로 Permanent로 승격됩니다.
+
+| 트리거 | 설명 |
+|--------|------|
+| **본문 편집** | 에디터에서 첫 글자 입력 시 |
+| **인라인 제목 편집** | 노트 상단 제목 수정 시 (300ms debounce) |
+| **파일 이름 변경** | vault의 rename 이벤트 발생 시 |
+| **Canvas 편집** | 노드 추가/수정/삭제, 연결선 변경 시 |
+| **더블 클릭** | 탭 헤더 또는 사이드바에서 더블 클릭 |
+
+---
+
+## 4. 패턴 예외 규칙
+
+특정 상황에서 기본 패턴과 다르게 동작하는 경우입니다.
+
+### Preview 탭 보존
+
+**새 노트 생성 시** 현재 Preview 탭은 승격되지 않고 그대로 유지됩니다.
+
+| 현재 탭 상태 | 일반 Browse | 새 노트 생성 |
+|-------------|------------|-------------|
+| **Preview** | Preview로 교체 | **보존** → 새 Permanent 생성 |
+
+### Daily Notes 특별 처리
+
+Daily Notes는 생성/열기 모두 **Create 패턴**으로 처리됩니다.
+
+- 판별 기준: Daily Notes 플러그인 설정(날짜 포맷, 저장 경로)을 참조하여 자동 판별
+
+### 빈 탭보다 Preview 우선
+
+빈 탭(Empty)이 있어도 기존 Preview 탭을 우선 재사용합니다.
+
+| 패널 상태 | Browse 시 동작 |
+|---------|---------------|
+| Preview + Empty | Preview 재사용 (Empty 사용 안 함) |
+| Permanent + Empty | Empty에 Preview로 열기 |
+
+---
+
+## 5. 기능별 상세
+
+각 UI 요소별 구체적인 동작입니다.
+
+### 파일 탐색기 (File Explorer)
+
+| 동작 | 패턴 |
+|------|------|
+| 싱글 클릭 | Browse 패턴 |
+| 더블 클릭 | Open 패턴 |
+
+### Quick Switcher (Ctrl+O)
+
+| 동작 | 패턴 |
+|------|------|
+| 파일 선택 | Browse 패턴 |
+
+### 북마크 (Bookmarks)
+
+| 동작 | 패턴 |
+|------|------|
+| 싱글 클릭 | Browse 패턴 |
+| 더블 클릭 | Open 패턴 |
+
+### 검색 (File Search)
+
+| 동작 | 패턴 |
+|------|------|
+| 싱글 클릭 | Browse 패턴 |
+| 더블 클릭 | Open 패턴 |
+
+### 그래프 뷰 (Graph View)
+
+| 동작 | 패턴 |
+|------|------|
+| 그래프 뷰 실행 | Browse 패턴 |
+| 노드 싱글 클릭 | Browse 패턴 |
+
+### 링크 (Links)
+
+| 동작 | 패턴 |
+|------|------|
+| 위키링크 클릭 | Browse 패턴 |
+| Backlinks 패널 클릭 | Browse 패턴 |
+| Outgoing Links 패널 클릭 | Browse 패턴 |
+
+### 최근 파일 / 무작위 노트
+
+| 동작 | 패턴 |
+|------|------|
+| 클릭 | Browse 패턴 |
+
+### Canvas
+
+| 동작 | 패턴 |
+|------|------|
+| Canvas 열기 | Browse 패턴 |
+| Canvas 편집 | Promote 패턴 (자동 승격) |
+
+### PDF
+
+| 동작 | 패턴 |
+|------|------|
+| PDF 열기 | Browse 패턴 (읽기 전용, 승격 없음) |
+
+### 새 노트 생성
+
+| 트리거 | 패턴 |
+|--------|------|
+| 리본 버튼 (새 노트) | Create 패턴 |
+| Ctrl+N / Cmd+N | Create 패턴 |
+| 우클릭 → 새 노트 | Create 패턴 |
+| Unique Note Creator | Create 패턴 |
+| Daily Notes | Create 패턴 (특별 처리) |
+
+---
+
+## 부록: 용어 정의
+
+| 용어 | 설명 |
+|------|------|
+| **패널 (Panel)** | 탭 그룹을 담는 컨테이너. Split으로 분할 가능 |
+| **리프 (Leaf)** | 개별 탭을 의미하는 Obsidian 내부 용어 |
+| **뷰 (View)** | 탭 안에 표시되는 콘텐츠 (Markdown 에디터, Graph, Canvas 등) |
+| **Browse** | 파일을 둘러보는 탐색 의도 |
+| **Create** | 새 파일을 생성하는 의도 |
+| **Open** | 명시적으로 파일을 여는 의도 |
+| **Promote** | Preview 탭을 Permanent로 승격 |

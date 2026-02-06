@@ -5,8 +5,23 @@ import {
   FileView,
   Notice,
   WorkspaceSplit,
+  App,
+  PluginSettingTab,
+  Setting,
 } from "obsidian";
 import { around } from "monkey-around";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 플러그인 설정
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface IDEStylePreviewSettings {
+  debugMode: boolean;
+}
+
+const DEFAULT_SETTINGS: IDEStylePreviewSettings = {
+  debugMode: false
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 타입 정의
@@ -84,6 +99,9 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // 상태
   // ─────────────────────────────────────────────────────────────────────────
 
+  /** 플러그인 설정 */
+  settings!: IDEStylePreviewSettings;
+
   /** Preview 상태인 탭들 */
   private previewLeaves = new WeakSet<WorkspaceLeaf>();
 
@@ -125,15 +143,21 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // ─────────────────────────────────────────────────────────────────────────
 
   async onload() {
+    await this.loadSettings();
     log("Plugin loaded");
 
     this.app.workspace.onLayoutReady(() => {
-      // 포괄적 디버그 모드 시작
-      this.setupComprehensiveDebug();
+      // 디버그 모드가 켜져 있을 때만 포괄적 디버그 시작
+      if (this.settings.debugMode) {
+        this.setupComprehensiveDebug();
+      }
     });
 
     this.installPatches();
     this.registerEventHandlers();
+
+    // 설정 탭 추가
+    this.addSettingTab(new IDEStylePreviewSettingTab(this.app, this));
   }
 
   onunload() {
@@ -1244,6 +1268,20 @@ private analyzeCSSStyles() {
       })
     );
 
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (!(file instanceof TFile)) return;
+        if (file.extension !== "canvas") return;
+
+        this.app.workspace.iterateAllLeaves((leaf) => {
+          if (this.getFilePath(leaf) === file.path && this.previewLeaves.has(leaf)) {
+            log("Canvas modified → promote");
+            this.promoteToPermament(leaf);
+          }
+        });
+      })
+    );
+
     this.registerDomEvent(document, "input", (evt: Event) => {
       this.handleInlineTitleEdit(evt);
     }, true);
@@ -1431,5 +1469,52 @@ private analyzeCSSStyles() {
       return true;
     }
     return false;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 설정 관리
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 설정 탭
+// ═══════════════════════════════════════════════════════════════════════════
+
+class IDEStylePreviewSettingTab extends PluginSettingTab {
+  plugin: IDEStylePreviewPlugin;
+
+  constructor(app: App, plugin: IDEStylePreviewPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display(): void {
+    const { containerEl } = this;
+
+    containerEl.empty();
+    containerEl.createEl("h2", { text: "IDE Style Preview Settings" });
+
+    new Setting(containerEl)
+      .setName("Debug mode")
+      .setDesc("Enable comprehensive debug logging (requires restart)")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.debugMode)
+          .onChange(async (value) => {
+            this.plugin.settings.debugMode = value;
+            await this.plugin.saveSettings();
+            new Notice(
+              "Debug mode changed. Please restart Obsidian for changes to take effect."
+            );
+          })
+      );
   }
 }

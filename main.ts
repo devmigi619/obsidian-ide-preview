@@ -661,10 +661,17 @@ private analyzeCSSStyles() {
   // ─────────────────────────────────────────────────────────────────────────
 
   private determineOpenIntent(file: TFile, openState?: any): OpenIntent {
+    // 1. rename: "all" means create (newly created file)
     if (openState?.eState?.rename === "all") {
       return "create";
     }
 
+    // 2. Canvas/PDF without rename should be browse
+    if (file.extension === "canvas" || file.extension === "pdf") {
+      return "browse";
+    }
+
+    // 3. Daily Notes detection
     if (openState?.state?.mode === "source") {
       if (CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
         return "create";
@@ -774,12 +781,14 @@ private analyzeCSSStyles() {
     console.log(`[${seq}]     leaf.id: ${this.getLeafDebugId(leaf)}`);
     this.debugFileExplorerState(`handleOpenFile 진입 - ${file.path}`);
 
-    // 새로 생성된 파일인 경우 → 제목편집모드 강제 적용
+    // 새로 생성된 파일인 경우 → 제목편집모드 강제 적용 (Daily Notes 제외)
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
-      openState = openState || {};
-      openState.eState = openState.eState || {};
-      openState.eState.rename = "all";
+      if (!CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
+        openState = openState || {};
+        openState.eState = openState.eState || {};
+        openState.eState.rename = "all";
+      }
     }
 
     const currentState = this.getTabState(leaf);
@@ -797,7 +806,7 @@ private analyzeCSSStyles() {
 
     // 다른 탭에 이미 열려있으면 포커스만 이동
     const existingLeaf = this.findLeafWithFile(file.path, leaf);
-    if (existingLeaf && intent === "browse" && !isCtrlClick) {
+    if (existingLeaf && !isCtrlClick) {
       console.log(`[${seq}]     → Already open, focusing existing tab`);
       this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
       return;
@@ -1083,7 +1092,8 @@ private analyzeCSSStyles() {
         if (!file) return;
 
         const activeLeaf = this.getActiveLeaf();
-        if (activeLeaf?.view?.getViewType() === "markdown") {
+        const viewType = activeLeaf?.view?.getViewType();
+        if (viewType === "markdown" || viewType === "canvas" || viewType === "pdf") {
           this.lastActiveLeaf = activeLeaf;
         }
       })

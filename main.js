@@ -539,6 +539,9 @@ ${"=".repeat(70)}`);
     if (((_a = openState == null ? void 0 : openState.eState) == null ? void 0 : _a.rename) === "all") {
       return "create";
     }
+    if (file.extension === "canvas" || file.extension === "pdf") {
+      return "browse";
+    }
     if (((_b = openState == null ? void 0 : openState.state) == null ? void 0 : _b.mode) === "source") {
       if (CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
         return "create";
@@ -621,9 +624,11 @@ ${"=".repeat(70)}`);
     this.debugFileExplorerState(`handleOpenFile \uC9C4\uC785 - ${file.path}`);
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
-      openState = openState || {};
-      openState.eState = openState.eState || {};
-      openState.eState.rename = "all";
+      if (!CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
+        openState = openState || {};
+        openState.eState = openState.eState || {};
+        openState.eState.rename = "all";
+      }
     }
     const currentState = this.getTabState(leaf);
     const intent = this.determineOpenIntent(file, openState);
@@ -635,7 +640,7 @@ ${"=".repeat(70)}`);
       return;
     }
     const existingLeaf = this.findLeafWithFile(file.path, leaf);
-    if (existingLeaf && intent === "browse" && !isCtrlClick) {
+    if (existingLeaf && !isCtrlClick) {
       console.log(`[${seq}]     \u2192 Already open, focusing existing tab`);
       this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
       return;
@@ -862,7 +867,8 @@ ${"=".repeat(70)}`);
         if (!file)
           return;
         const activeLeaf = this.getActiveLeaf();
-        if (((_c = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _c.getViewType()) === "markdown") {
+        const viewType = (_c = activeLeaf == null ? void 0 : activeLeaf.view) == null ? void 0 : _c.getViewType();
+        if (viewType === "markdown" || viewType === "canvas" || viewType === "pdf") {
           this.lastActiveLeaf = activeLeaf;
         }
       })

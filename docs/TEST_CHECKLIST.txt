@@ -31,115 +31,182 @@
 1단계: 전체 기능 테스트
 ================================================================================
 
-Browse 패턴 (싱글클릭)
+기능별로 정리. 파일 타입 명시가 없으면 Markdown(.md) 파일 기준.
+
+
+파일 탐색기 (File Explorer)
 --------------------------------------------------------------------------------
 
-파일 탐색기
+싱글클릭 (Browse 패턴)
   ✓ Empty 탭 → Preview로 열기
   ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
   ✓ Preview 탭 → Preview로 교체
+
+더블클릭 (Open 패턴)
+  ✓ Empty 탭 → Permanent로 열기
+  ✓ Permanent 탭 → 새 Permanent 생성
+  ✓ Preview (다른 파일) → Permanent로 교체
+  ✓ Preview (같은 파일) → Permanent로 승격
+
 
 Quick Switcher (Ctrl+O)
+--------------------------------------------------------------------------------
+
+파일 선택 (Browse 패턴)
   ✓ Empty 탭 → Preview로 열기
   ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
   ✓ Preview 탭 → Preview로 교체
 
-북마크
+
+북마크 (Bookmarks)
+--------------------------------------------------------------------------------
+
+싱글클릭 (Browse 패턴)
   ✓ Empty 탭 → Preview로 열기
   ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
   ✓ Preview 탭 → Preview로 교체
+
+더블클릭 (Open 패턴)
+  ✓ Empty 탭 → Permanent로 열기
+  ✓ Permanent 탭 → 새 Permanent 생성
+  ✓ Preview (다른 파일) → Permanent로 교체
+  ✓ Preview (같은 파일) → Permanent로 승격
+
 
 검색 (File Search)
+--------------------------------------------------------------------------------
+
+싱글클릭 (Browse 패턴)
   ✓ Empty 탭 → Preview로 열기
   ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
   ✓ Preview 탭 → Preview로 교체
 
-그래프 뷰 - 열기
+더블클릭 (Open 패턴)
+  ✓ Empty 탭 → Permanent로 열기
+  ✓ Permanent 탭 → 새 Permanent 생성
+  ✓ Preview (다른 파일) → Permanent로 교체
+  ✓ Preview (같은 파일) → Permanent로 승격
+
+
+그래프 뷰 (Graph View)
+--------------------------------------------------------------------------------
+
+열기 (Browse 패턴)
   ✓ Empty 탭 → Preview로 그래프뷰 열림
   ✓ Permanent 노트에서 실행 → 새 Preview 그래프뷰 생성 (Permanent 보존)
   ✓ Preview 노트에서 실행 → Preview를 그래프뷰로 교체
-  ✓ 중복 방지: 그래프뷰 이미 열려있으면 → 포커스 이동만 (새 탭 생성 안 됨)
+  ✓ 중복 방지: 그래프뷰 이미 열려있으면 → 포커스 이동만
 
-그래프 뷰 - 노드 클릭
+노드 클릭 (Browse 패턴)
   ✓ Preview 그래프뷰에서 노드 클릭 → Preview에서 노트로 교체
-  ✓ Permanent 그래프뷰에서 노드 클릭 → 새 Preview 노트 생성 (Permanent 보존)
+  ✓ Permanent 그래프뷰에서 노드 클릭 → 새 Preview 노트 생성
 
-링크
-  ☐ 위키링크 클릭 - Empty
-  ☐ 위키링크 클릭 - Permanent
-  ☐ 위키링크 클릭 - Preview
-  ☐ Backlinks 패널 클릭 - Empty
-  ☐ Backlinks 패널 클릭 - Permanent
-  ☐ Backlinks 패널 클릭 - Preview
-  ☐ Outgoing Links 패널 클릭 - Empty
-  ☐ Outgoing Links 패널 클릭 - Permanent
-  ☐ Outgoing Links 패널 클릭 - Preview
 
-최근 파일 / 무작위 노트
-  ☐ 최근 파일 클릭 - Empty
-  ☐ 최근 파일 클릭 - Permanent
-  ☐ 최근 파일 클릭 - Preview
-  ☐ 무작위 노트 - Empty
-  ☐ 무작위 노트 - Permanent
-  ☐ 무작위 노트 - Preview
+링크 (Links)
+--------------------------------------------------------------------------------
+
+주의: 링크 클릭은 노트가 열려있어야 하므로 Empty 탭 테스트 불가
+
+위키링크 클릭 (Browse 패턴)
+  ✓ Permanent 탭에서 클릭
+  ✓ Preview 탭에서 클릭
+
+Backlinks 패널 클릭 (Browse 패턴)
+  ✓ Permanent 탭에서 클릭
+  ✓ Preview 탭에서 클릭
+
+Outgoing Links 패널 클릭 (Browse 패턴)
+  ✓ Permanent 탭에서 클릭
+  ✓ Preview 탭에서 클릭
+
+
+무작위 노트 (Random Note)
+--------------------------------------------------------------------------------
+
+열기 (Browse 패턴)
+  ✓ Empty 탭
+  ✓ Permanent 탭
+  ✓ Preview 탭
+
 
 Canvas
-  ☐ Canvas 열기 - Empty
-  ☐ Canvas 열기 - Permanent
-  ☐ Canvas 열기 - Preview
+--------------------------------------------------------------------------------
+
+생성 - 리본 버튼 (Create 패턴)
+  ✓ Empty 탭 → Permanent로 생성 (제목 편집 모드)
+  ✓ Permanent 탭 → 새 Permanent 생성 (제목 편집 모드)
+  ✓ Preview 탭 → 새 Permanent 생성 (Preview 보존, 제목 편집 모드)
+
+싱글클릭 열기 (Browse 패턴)
+  ✓ Empty 탭 → Preview로 열기
+  ✓ Permanent 탭 → Preview로 열기
+  ✓ Preview 탭 → Preview로 교체
+
+더블클릭 열기 (Open 패턴)
+  ✓ Empty 탭 → Permanent로 열기
+  ✓ Permanent 탭 → 새 Permanent 생성
+  ✓ Preview (다른 Canvas) → Permanent로 교체
+  ✓ Preview (같은 Canvas) → Permanent로 승격
+
+승격 (Promote 패턴)
+  ✓ 노드 추가 → Permanent 승격
+  ✓ 노드 드래그 이동 → Permanent 승격
+  ✓ 시점 이동/줌 → 승격 안 됨 확인 (정상)
+  ✓ 파일 이름 변경 (Preview 탭) → Permanent 승격
+  ✓ 탭 헤더 더블클릭 → Permanent 승격
+
 
 PDF
-  ☐ PDF 열기 - Empty (읽기 전용)
-  ☐ PDF 열기 - Permanent (읽기 전용)
-  ☐ PDF 열기 - Preview (읽기 전용, 승격 없음)
-
-
-Open 패턴 (더블클릭)
 --------------------------------------------------------------------------------
 
-파일 탐색기 더블클릭
-  ☐ Empty 탭 → Permanent로 열기
-  ☐ Permanent 탭 → 새 Permanent 생성
-  ☐ Preview (다른 파일) → Permanent로 교체
-  ☐ Preview (같은 파일) → Permanent로 승격
+싱글클릭 열기 (Browse 패턴)
+  ✓ Empty 탭 → Preview로 열기
+  ✓ Permanent 탭 → Preview로 열기
+  ✓ Preview 탭 → Preview로 교체
 
-북마크 더블클릭
-  ☐ Empty 탭 → Permanent로 열기
-  ☐ Permanent 탭 → 새 Permanent 생성
-  ☐ Preview (다른 파일) → Permanent로 교체
-  ☐ Preview (같은 파일) → Permanent로 승격
+더블클릭 열기 (Browse 패턴 - md/Canvas와 다름!)
+  ✓ 더블클릭으로 열어도 Preview로 열림 (Permanent 아님)
 
-검색 결과 더블클릭
-  ☐ Empty 탭 → Permanent로 열기
-  ☐ Permanent 탭 → 새 Permanent 생성
-  ☐ Preview (다른 파일) → Permanent로 교체
-  ☐ Preview (같은 파일) → Permanent로 승격
-
-탭 헤더 더블클릭
-  ☐ Preview 탭 헤더 더블클릭 → Permanent로 승격
+수동 승격
+  ✓ 탭 헤더 더블클릭 → Permanent로 승격
+  ✓ 사이드바에서 Preview PDF 더블클릭 → Permanent로 승격
 
 
-Create 패턴 (새 노트 생성)
+새 노트 생성
 --------------------------------------------------------------------------------
 
-리본 버튼 / Ctrl+N
-  ☐ Empty 탭 → Permanent로 생성 (제목 편집 모드)
-  ☐ Permanent 탭 → 새 Permanent 생성 (제목 편집 모드)
-  ☐ Preview 탭 → 새 Permanent 생성 (Preview 보존, 제목 편집 모드)
+리본 버튼 / Ctrl+N (Create 패턴)
+  ✓ Empty 탭 → Permanent로 생성 (제목 편집 모드)
+  ✓ Permanent 탭 → 새 Permanent 생성 (제목 편집 모드)
+  ✓ Preview 탭 → 새 Permanent 생성 (Preview 보존, 제목 편집 모드)
 
-Daily Notes
-  ☐ Empty 탭 → Permanent로 생성
-  ☐ Permanent 탭 → 새 Permanent 생성
-  ☐ Preview 탭 → 새 Permanent 생성 (Preview 보존)
+우클릭 → 새 노트 (Create 패턴)
+  ✓ Empty 탭 → Permanent로 생성 (제목 편집 모드)
+  ✓ Permanent 탭 → 새 Permanent 생성 (제목 편집 모드)
+  ✓ Preview 탭 → 새 Permanent 생성 (Preview 보존, 제목 편집 모드)
 
-Unique Note Creator
-  ☐ Empty 탭 → Permanent로 생성 (제목 편집 모드)
-  ☐ Permanent 탭 → 새 Permanent 생성 (제목 편집 모드)
-  ☐ Preview 탭 → 새 Permanent 생성 (Preview 보존, 제목 편집 모드)
+Daily Notes (Create 패턴 - 생성/열기 모두 적용)
+
+  미존재 (새로 생성)
+    ✓ Empty 탭 → Permanent로 생성
+    ✓ Permanent 탭 → 새 Permanent 생성 (버그: 파일이름변경 모달 표시 → 2단계 #2)
+    ✓ Preview 탭 → 새 Permanent 생성, Preview 보존 (버그: 파일이름변경 모달 표시 → 2단계 #2)
+
+  이미 존재 (열기 - Browse가 아닌 Create 패턴)
+    ✓ Empty 탭 → Permanent로 열기
+    ✓ Permanent 탭 → 새 Permanent로 열기
+    ✓ Preview 탭 → Permanent로 열기 (Preview 보존)
+
+Unique Note Creator (Create 패턴)
+  ✓ Empty 탭 → Permanent로 생성 (제목 편집 모드)
+  ✓ Permanent 탭 → 새 Permanent 생성 (제목 편집 모드)
+  ✓ Preview 탭 → 새 Permanent 생성 (Preview 보존, 제목 편집 모드)
 
 
-Promote 패턴 (Preview → Permanent 승격)
+승격 트리거 - Markdown 노트 (Promote 패턴)
 --------------------------------------------------------------------------------
+
+Canvas/PDF 승격은 해당 섹션 참조
 
 본문 편집
   ☐ Preview 탭에서 첫 글자 입력 → Permanent로 승격
@@ -152,18 +219,8 @@ Promote 패턴 (Preview → Permanent 승격)
 파일 이름 변경
   ☐ Preview 탭 파일의 이름을 탐색기에서 변경 → Permanent로 승격
 
-Canvas 편집
-  ☐ Preview Canvas에서 노드 추가 → Permanent로 승격
-  ☐ Preview Canvas에서 노드 수정 → Permanent로 승격
-  ☐ Preview Canvas에서 연결선 추가 → Permanent로 승격
-
 탭 헤더 더블클릭
   ☐ Preview 탭 헤더 더블클릭 → Permanent로 승격
-
-사이드바 더블클릭
-  ☐ 파일 탐색기에서 Preview로 열린 파일 더블클릭 → Permanent로 승격
-  ☐ 북마크에서 Preview로 열린 파일 더블클릭 → Permanent로 승격
-  ☐ 검색 결과에서 Preview로 열린 파일 더블클릭 → Permanent로 승격
 
 
 전역 규칙
@@ -172,7 +229,7 @@ Canvas 편집
 패널당 Preview 1개
   ☐ Permanent 탭에서 파일 A 싱글클릭 → Preview 생성
   ☐ 계속해서 파일 B 싱글클릭 → 기존 Preview 재사용 (파일 A → B로 교체)
-  ☐ Preview가 있는 상태에서 새 파일 싱글클릭 → 빈 탭보다 Preview 우선 재사용
+  ☐ Preview + Empty 상태에서 새 파일 싱글클릭 → 빈 탭보다 Preview 우선 재사용
 
 중복 열기 방지
   ☐ 같은 파일 재클릭 → 포커스 이동 (새 탭 생성 안 됨)
@@ -233,7 +290,25 @@ Modifier Key 동작
   ☐ Obsidian 이벤트 순서 재검토
 
 
-2. 테스트 중 발견된 버그
+2. Daily Notes 판별 패턴 개선 필요 (부분 해결)
+--------------------------------------------------------------------------------
+
+현상:
+  - Daily Notes 생성 시 파일이름변경 모달 표시 (버그 #2)
+  - Daily Notes 중복 열기 방지 미적용 (버그 #3)
+
+수정 내역:
+  - handleOpenFile: Daily Note일 때 rename = "all" 스킵
+  - 중복 방지: intent === "browse" 조건 제거 → 모든 intent에 적용
+
+잔여 문제:
+  - CONFIG.DAILY_NOTE_PATTERN이 하드코딩: /^\d{4}-\d{2}-\d{2}\.md$/
+  - 기본 포맷(YYYY-MM-DD)에서만 동작, 커스텀 포맷 미지원
+  - 사용자가 Daily Notes 날짜 포맷을 변경하면 감지 실패
+  ☐ Daily Notes 플러그인 설정에서 포맷/경로를 동적으로 읽도록 개선
+
+
+4. 테스트 중 발견된 버그
 --------------------------------------------------------------------------------
 
 (여기에 테스트 중 발견된 버그를 추가하세요)
@@ -296,7 +371,9 @@ README.md (사용자용)
 ================================================================================
 
 전체 진행률
-  - 1단계: 20% (18/89 항목)
+  - 1단계: 47% (42/89 항목)
+    * 링크 Empty 탭 3개: 테스트 불가(N/A), 항목에서 제외
+    * 최근 파일: 별도 플러그인 필요, 테스트 제외
   - 2단계: 미시작
   - 3단계: 미시작
   - 4단계: 미시작

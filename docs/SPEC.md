@@ -87,8 +87,8 @@ Obsidian의 기본 동작을 따릅니다:
 |--------|------|
 | **본문 편집** | 에디터에서 첫 글자 입력 시 |
 | **인라인 제목 편집** | 노트 상단 제목 수정 시 (300ms debounce) |
-| **파일 이름 변경** | vault의 rename 이벤트 발생 시 |
-| **Canvas 편집** | 노드 추가/수정/삭제, 연결선 변경 시 |
+| **파일 이름 변경** | Preview 탭 파일의 이름 변경 시 (vault.rename 이벤트) |
+| **Canvas 편집** | 노드 추가/수정/삭제/이동, 연결선 변경 등 (vault.modify 이벤트) |
 | **더블 클릭** | 탭 헤더 또는 사이드바에서 더블 클릭 |
 
 ---
@@ -168,24 +168,48 @@ Daily Notes는 생성/열기 모두 **Create 패턴**으로 처리됩니다.
 | Backlinks 패널 클릭 | Browse 패턴 |
 | Outgoing Links 패널 클릭 | Browse 패턴 |
 
-### 최근 파일 / 무작위 노트
+### 무작위 노트 (Random Note)
 
 | 동작 | 패턴 |
 |------|------|
-| 클릭 | Browse 패턴 |
+| 무작위 노트 열기 | Browse 패턴 |
+
+> **참고**: 최근 파일(Recent Files)은 별도 플러그인이 필요하므로 미지원
 
 ### Canvas
 
 | 동작 | 패턴 |
 |------|------|
-| Canvas 열기 | Browse 패턴 |
-| Canvas 편집 | Promote 패턴 (자동 승격) |
+| Canvas 생성 (리본 버튼) | Create 패턴 → Permanent |
+| Canvas 열기 (파일 탐색기 싱글클릭) | Browse 패턴 → Preview |
+| Canvas 열기 (더블클릭) | Open 패턴 → Permanent |
+
+**Canvas Permanent 승격 케이스:**
+1. **Canvas 편집** (자동 승격):
+   - 노드 추가/수정/삭제
+   - 연결선 추가/수정/삭제
+   - 노드 드래그 이동
+   - 노드 편집기 실행 (더블클릭)
+   - 모든 Canvas 내용 변경 → `vault.modify` 이벤트로 감지
+
+2. **파일 이름 변경** (자동 승격):
+   - 현재 Preview 탭에 열려있는 Canvas 파일 이름 변경 시 → `vault.rename` 이벤트로 감지
+
+3. **더블클릭** (수동 승격):
+   - 탭 헤더 더블클릭
+   - 파일 탐색기/북마크/검색 결과 더블클릭
 
 ### PDF
 
 | 동작 | 패턴 |
 |------|------|
-| PDF 열기 | Browse 패턴 (읽기 전용, 승격 없음) |
+| PDF 열기 (싱글클릭) | Browse 패턴 → Preview |
+| PDF 열기 (더블클릭) | Browse 패턴 → Preview → 수동 승격 가능 |
+
+**PDF 특징:**
+- 읽기 전용 (편집 불가)
+- 자동 승격 없음 (본문 편집, 파일 수정 등으로 승격 안 됨)
+- 수동 승격 가능 (더블클릭으로 Permanent 전환 가능)
 
 ### 새 노트 생성
 

@@ -66,6 +66,9 @@ function around1(obj, method, createWrapper) {
 }
 
 // main.ts
+var DEFAULT_SETTINGS = {
+  debugMode: false
+};
 var CONFIG = {
   /** 인라인 제목 변경 시 파일명 반영 대기 시간 */
   TITLE_RENAME_DEBOUNCE_MS: 300,
@@ -86,9 +89,6 @@ function log(message, ...args) {
 var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
-    // ─────────────────────────────────────────────────────────────────────────
-    // 상태
-    // ─────────────────────────────────────────────────────────────────────────
     /** Preview 상태인 탭들 */
     this.previewLeaves = /* @__PURE__ */ new WeakSet();
     /** openFile에서 이미 처리한 탭 (setViewState 중복 방지) */
@@ -118,12 +118,16 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   // 라이프사이클
   // ─────────────────────────────────────────────────────────────────────────
   async onload() {
+    await this.loadSettings();
     log("Plugin loaded");
     this.app.workspace.onLayoutReady(() => {
-      this.setupComprehensiveDebug();
+      if (this.settings.debugMode) {
+        this.setupComprehensiveDebug();
+      }
     });
     this.installPatches();
     this.registerEventHandlers();
+    this.addSettingTab(new IDEStylePreviewSettingTab(this.app, this));
   }
   onunload() {
     if (this.debugObserver) {
@@ -1016,6 +1020,20 @@ ${"=".repeat(70)}`);
         });
       })
     );
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (!(file instanceof import_obsidian.TFile))
+          return;
+        if (file.extension !== "canvas")
+          return;
+        this.app.workspace.iterateAllLeaves((leaf) => {
+          if (this.getFilePath(leaf) === file.path && this.previewLeaves.has(leaf)) {
+            log("Canvas modified \u2192 promote");
+            this.promoteToPermament(leaf);
+          }
+        });
+      })
+    );
     this.registerDomEvent(document, "input", (evt) => {
       this.handleInlineTitleEdit(evt);
     }, true);
@@ -1173,5 +1191,34 @@ ${"=".repeat(70)}`);
       return true;
     }
     return false;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+  // 설정 관리
+  // ─────────────────────────────────────────────────────────────────────────
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+};
+var IDEStylePreviewSettingTab = class extends import_obsidian.PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl("h2", { text: "IDE Style Preview Settings" });
+    new import_obsidian.Setting(containerEl).setName("Debug mode").setDesc("Enable comprehensive debug logging (requires restart)").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.debugMode).onChange(async (value) => {
+        this.plugin.settings.debugMode = value;
+        await this.plugin.saveSettings();
+        new import_obsidian.Notice(
+          "Debug mode changed. Please restart Obsidian for changes to take effect."
+        );
+      })
+    );
   }
 };

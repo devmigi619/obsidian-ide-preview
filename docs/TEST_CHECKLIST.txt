@@ -35,30 +35,34 @@ Browse 패턴 (싱글클릭)
 --------------------------------------------------------------------------------
 
 파일 탐색기
-  ☐ Empty 탭 → Preview로 열기
-  ☐ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
-  ☐ Preview 탭 → Preview로 교체
+  ✓ Empty 탭 → Preview로 열기
+  ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
+  ✓ Preview 탭 → Preview로 교체
 
 Quick Switcher (Ctrl+O)
-  ☐ Empty 탭 → Preview로 열기
-  ☐ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
-  ☐ Preview 탭 → Preview로 교체
+  ✓ Empty 탭 → Preview로 열기
+  ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
+  ✓ Preview 탭 → Preview로 교체
 
 북마크
-  ☐ Empty 탭 → Preview로 열기
-  ☐ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
-  ☐ Preview 탭 → Preview로 교체
+  ✓ Empty 탭 → Preview로 열기
+  ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
+  ✓ Preview 탭 → Preview로 교체
 
 검색 (File Search)
-  ☐ Empty 탭 → Preview로 열기
-  ☐ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
-  ☐ Preview 탭 → Preview로 교체
+  ✓ Empty 탭 → Preview로 열기
+  ✓ Permanent 탭 → 기존 Preview 재사용 또는 새 Preview 생성
+  ✓ Preview 탭 → Preview로 교체
 
-그래프 뷰
-  ☐ Empty 탭에서 그래프뷰 실행 → Preview로 열기
-  ☐ Permanent 탭에서 그래프뷰 실행 → 새 Preview 생성
-  ☐ Preview 그래프뷰에서 노드 클릭 → 해당 탭에서 노트로 교체
-  ☐ Permanent 그래프뷰에서 노드 클릭 → Preview 재사용/생성
+그래프 뷰 - 열기
+  ✓ Empty 탭 → Preview로 그래프뷰 열림
+  ✓ Permanent 노트에서 실행 → 새 Preview 그래프뷰 생성 (Permanent 보존)
+  ✓ Preview 노트에서 실행 → Preview를 그래프뷰로 교체
+  ✓ 중복 방지: 그래프뷰 이미 열려있으면 → 포커스 이동만 (새 탭 생성 안 됨)
+
+그래프 뷰 - 노드 클릭
+  ✓ Preview 그래프뷰에서 노드 클릭 → Preview에서 노트로 교체
+  ✓ Permanent 그래프뷰에서 노드 클릭 → 새 Preview 노트 생성 (Permanent 보존)
 
 링크
   ☐ 위키링크 클릭 - Empty
@@ -292,7 +296,7 @@ README.md (사용자용)
 ================================================================================
 
 전체 진행률
-  - 1단계: 0% (0/87 항목)
+  - 1단계: 20% (18/89 항목)
   - 2단계: 미시작
   - 3단계: 미시작
   - 4단계: 미시작

@@ -189,8 +189,8 @@ Daily Notes (Create 패턴 - 생성/열기 모두 적용)
 
   미존재 (새로 생성)
     ✓ Empty 탭 → Permanent로 생성
-    ✓ Permanent 탭 → 새 Permanent 생성 (버그: 파일이름변경 모달 표시 → 2단계 #2)
-    ✓ Preview 탭 → 새 Permanent 생성, Preview 보존 (버그: 파일이름변경 모달 표시 → 2단계 #2)
+    ✓ Permanent 탭 → 새 Permanent 생성
+    ✓ Preview 탭 → 새 Permanent 생성, Preview 보존
 
   이미 존재 (열기 - Browse가 아닌 Create 패턴)
     ✓ Empty 탭 → Permanent로 열기
@@ -209,41 +209,41 @@ Unique Note Creator (Create 패턴)
 Canvas/PDF 승격은 해당 섹션 참조
 
 본문 편집
-  ☐ Preview 탭에서 첫 글자 입력 → Permanent로 승격
-  ☐ 승격 후 탭 제목이 일반체(non-italic)로 변경 확인
+  ✓ Preview 탭에서 첫 글자 입력 → Permanent로 승격
+  ✓ 승격 후 탭 제목이 일반체(non-italic)로 변경 확인
 
 인라인 제목 편집 (300ms debounce)
-  ☐ Preview 탭에서 인라인 제목 수정 → 300ms 후 Permanent로 승격
-  ☐ 빠른 연속 수정 시 300ms 후 1회만 승격 확인
+  ✓ Preview 탭에서 인라인 제목 수정 → 300ms 후 Permanent로 승격
+  ✓ 빠른 연속 수정 시 300ms 후 1회만 승격 확인
 
 파일 이름 변경
-  ☐ Preview 탭 파일의 이름을 탐색기에서 변경 → Permanent로 승격
+  ✓ Preview 탭 파일의 이름을 탐색기에서 변경 → Permanent로 승격
 
 탭 헤더 더블클릭
-  ☐ Preview 탭 헤더 더블클릭 → Permanent로 승격
+  ✓ Preview 탭 헤더 더블클릭 → Permanent로 승격
 
 
 전역 규칙
 --------------------------------------------------------------------------------
 
 패널당 Preview 1개
-  ☐ Permanent 탭에서 파일 A 싱글클릭 → Preview 생성
-  ☐ 계속해서 파일 B 싱글클릭 → 기존 Preview 재사용 (파일 A → B로 교체)
-  ☐ Preview + Empty 상태에서 새 파일 싱글클릭 → 빈 탭보다 Preview 우선 재사용
+  ✓ Permanent 탭에서 파일 A 싱글클릭 → Preview 생성
+  ✓ 계속해서 파일 B 싱글클릭 → 기존 Preview 재사용 (파일 A → B로 교체)
+  ✓ Preview + Empty 상태에서 새 파일 싱글클릭 → 빈 탭보다 Preview 우선 재사용
 
 중복 열기 방지
-  ☐ 같은 파일 재클릭 → 포커스 이동 (새 탭 생성 안 됨)
-  ☐ 그래프뷰 재실행 → 포커스 이동 (새 탭 생성 안 됨)
-  ☐ 다른 패널에서 같은 파일 열기 → 정상 동작 (패널별 독립)
+  ✓ 같은 파일 재클릭 → 포커스 이동 (새 탭 생성 안 됨)
+  ✓ 그래프뷰 재실행 → 포커스 이동 (새 탭 생성 안 됨)
+  ✓ 다른 패널에서 같은 파일 열기 → 정상 동작 (패널별 독립)
 
 Modifier Key 동작
-  ☐ Ctrl/Cmd + 파일 탐색기 클릭 → 새 Permanent 탭 생성
-  ☐ Ctrl/Cmd + 북마크 클릭 → 새 Permanent 탭 생성
-  ☐ Ctrl/Cmd + 검색 결과 클릭 → 새 Permanent 탭 생성
+  ✓ Ctrl/Cmd + 파일 탐색기 클릭 → 새 Permanent 탭 생성
+  ✓ Ctrl/Cmd + 북마크 클릭 → 새 Permanent 탭 생성
+  ✓ Ctrl/Cmd + 검색 결과 클릭 → 새 Permanent 탭 생성
 
 포커스 관리
-  ☐ 새 탭 생성 시 해당 탭으로 포커스 이동
-  ☐ 탭 닫기 시 탐색기 선택 상태 정리 (is-active, has-focus 제거)
+  ✓ 새 탭 생성 시 해당 탭으로 포커스 이동
+  ✓ 탭 닫기 시 탐색기 선택 상태 정리 (is-active, has-focus 제거, 2단계 #1 잔여)
 
 
 ================================================================================
@@ -290,25 +290,26 @@ Modifier Key 동작
   ☐ Obsidian 이벤트 순서 재검토
 
 
-2. Daily Notes 판별 패턴 개선 필요 (부분 해결)
+2. Daily Notes 판별 패턴 개선 (해결 ✓)
 --------------------------------------------------------------------------------
 
-현상:
-  - Daily Notes 생성 시 파일이름변경 모달 표시 (버그 #2)
-  - Daily Notes 중복 열기 방지 미적용 (버그 #3)
+수정 내역:
+  ✓ handleOpenFile: Daily Note일 때 rename = "all" 스킵
+  ✓ 중복 방지: intent === "browse" 조건 제거 → 모든 intent에 적용
+  ✓ 하드코딩 패턴 제거 → isDailyNote() 메서드로 교체
+  ✓ internalPlugins API로 Daily Notes 설정(format/folder) 동적 읽기
+  ✓ moment strict 파싱으로 커스텀 포맷 지원 확인
+
+
+4. Modifier Key (Ctrl+Click) 동작 이상 (해결 ✓)
+--------------------------------------------------------------------------------
 
 수정 내역:
-  - handleOpenFile: Daily Note일 때 rename = "all" 스킵
-  - 중복 방지: intent === "browse" 조건 제거 → 모든 intent에 적용
-
-잔여 문제:
-  - CONFIG.DAILY_NOTE_PATTERN이 하드코딩: /^\d{4}-\d{2}-\d{2}\.md$/
-  - 기본 포맷(YYYY-MM-DD)에서만 동작, 커스텀 포맷 미지원
-  - 사용자가 Daily Notes 날짜 포맷을 변경하면 감지 실패
-  ☐ Daily Notes 플러그인 설정에서 포맷/경로를 동적으로 읽도록 개선
+  ✓ Ctrl+Click 감지를 click → mousedown 캡처 페이즈로 변경
+  ✓ isFileElement()에 .tree-item-self 셀렉터 추가 (검색 결과 등 대응)
 
 
-4. 테스트 중 발견된 버그
+5. 테스트 중 발견된 버그
 --------------------------------------------------------------------------------
 
 (여기에 테스트 중 발견된 버그를 추가하세요)
@@ -371,7 +372,7 @@ README.md (사용자용)
 ================================================================================
 
 전체 진행률
-  - 1단계: 47% (42/89 항목)
+  - 1단계: 100% (89/89 항목) - 전체 통과
     * 링크 Empty 탭 3개: 테스트 불가(N/A), 항목에서 제외
     * 최근 파일: 별도 플러그인 필요, 테스트 제외
   - 2단계: 미시작

@@ -72,8 +72,6 @@ var DEFAULT_SETTINGS = {
 var CONFIG = {
   /** 인라인 제목 변경 시 파일명 반영 대기 시간 */
   TITLE_RENAME_DEBOUNCE_MS: 300,
-  /** Daily Note 파일명 패턴 */
-  DAILY_NOTE_PATTERN: /^\d{4}-\d{2}-\d{2}\.md$/,
   /** CSS 클래스명 */
   CSS_CLASSES: {
     PREVIEW_TAB: "is-preview-tab",
@@ -543,7 +541,7 @@ ${"=".repeat(70)}`);
       return "browse";
     }
     if (((_b = openState == null ? void 0 : openState.state) == null ? void 0 : _b.mode) === "source") {
-      if (CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
+      if (this.isDailyNote(file)) {
         return "create";
       }
     }
@@ -624,7 +622,7 @@ ${"=".repeat(70)}`);
     this.debugFileExplorerState(`handleOpenFile \uC9C4\uC785 - ${file.path}`);
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
-      if (!CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
+      if (!this.isDailyNote(file)) {
         openState = openState || {};
         openState.eState = openState.eState || {};
         openState.eState.rename = "all";
@@ -890,6 +888,11 @@ ${"=".repeat(70)}`);
     );
   }
   registerClickHandlers() {
+    this.registerDomEvent(document, "mousedown", (evt) => {
+      if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
+        this.isCtrlClickPending = true;
+      }
+    }, true);
     this.registerDomEvent(document, "click", (evt) => {
       const target = evt.target;
       const fileEl = target.closest("[data-path]");
@@ -900,9 +903,6 @@ ${"=".repeat(70)}`);
 [${seq}] \u25CF \uD30C\uC77C \uC694\uC18C \uC2F1\uAE00\uD074\uB9AD: ${path}`);
         console.log(`[${seq}]   Ctrl/Meta: ${evt.ctrlKey || evt.metaKey}`);
         this.debugFileExplorerState(`\uC2F1\uAE00\uD074\uB9AD - ${path}`);
-      }
-      if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
-        this.isCtrlClickPending = true;
       }
     }, true);
     this.registerDomEvent(document, "dblclick", (evt) => {
@@ -1163,7 +1163,21 @@ ${"=".repeat(70)}`);
   isFileElement(target) {
     if (!(target instanceof HTMLElement))
       return false;
-    return !!target.closest("[data-path]");
+    return !!target.closest("[data-path]") || !!target.closest(".tree-item-self");
+  }
+  isDailyNote(file) {
+    var _a, _b, _c, _d;
+    if (file.extension !== "md")
+      return false;
+    const dailyNotes = (_b = (_a = this.app.internalPlugins) == null ? void 0 : _a.getPluginById) == null ? void 0 : _b.call(_a, "daily-notes");
+    if (!(dailyNotes == null ? void 0 : dailyNotes.enabled))
+      return false;
+    const options = (_c = dailyNotes.instance) == null ? void 0 : _c.options;
+    const format = (options == null ? void 0 : options.format) || "YYYY-MM-DD";
+    const folder = (options == null ? void 0 : options.folder) || "";
+    if (folder && ((_d = file.parent) == null ? void 0 : _d.path) !== folder)
+      return false;
+    return window.moment(file.basename, format, true).isValid();
   }
   findLeafByContentEl(contentEl) {
     let found = null;

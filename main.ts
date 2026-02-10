@@ -61,9 +61,6 @@ const CONFIG = {
   /** 인라인 제목 변경 시 파일명 반영 대기 시간 */
   TITLE_RENAME_DEBOUNCE_MS: 300,
 
-  /** Daily Note 파일명 패턴 */
-  DAILY_NOTE_PATTERN: /^\d{4}-\d{2}-\d{2}\.md$/,
-
   /** CSS 클래스명 */
   CSS_CLASSES: {
     PREVIEW_TAB: "is-preview-tab",
@@ -673,7 +670,7 @@ private analyzeCSSStyles() {
 
     // 3. Daily Notes detection
     if (openState?.state?.mode === "source") {
-      if (CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
+      if (this.isDailyNote(file)) {
         return "create";
       }
     }
@@ -784,7 +781,7 @@ private analyzeCSSStyles() {
     // 새로 생성된 파일인 경우 → 제목편집모드 강제 적용 (Daily Notes 제외)
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
-      if (!CONFIG.DAILY_NOTE_PATTERN.test(file.name)) {
+      if (!this.isDailyNote(file)) {
         openState = openState || {};
         openState.eState = openState.eState || {};
         openState.eState.rename = "all";
@@ -1119,7 +1116,14 @@ private analyzeCSSStyles() {
   }
 
   private registerClickHandlers() {
-    // 싱글 클릭 감지
+    // Ctrl+Click 감지 (mousedown 캡처 페이즈 — Obsidian이 mousedown에서 openFile 호출하므로 click보다 먼저 설정)
+    this.registerDomEvent(document, "mousedown", (evt: MouseEvent) => {
+      if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
+        this.isCtrlClickPending = true;
+      }
+    }, true);
+
+    // 싱글 클릭 감지 (디버그 로그용)
     this.registerDomEvent(document, "click", (evt: MouseEvent) => {
       const target = evt.target as HTMLElement;
       const fileEl = target.closest("[data-path]") as HTMLElement | null;
@@ -1130,10 +1134,6 @@ private analyzeCSSStyles() {
         console.log(`\n[${seq}] ● 파일 요소 싱글클릭: ${path}`);
         console.log(`[${seq}]   Ctrl/Meta: ${evt.ctrlKey || evt.metaKey}`);
         this.debugFileExplorerState(`싱글클릭 - ${path}`);
-      }
-
-      if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
-        this.isCtrlClickPending = true;
       }
     }, true);
 
@@ -1438,7 +1438,24 @@ private analyzeCSSStyles() {
 
   private isFileElement(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
-    return !!target.closest("[data-path]");
+    return !!target.closest("[data-path]") || !!target.closest(".tree-item-self");
+  }
+
+  private isDailyNote(file: TFile): boolean {
+    if (file.extension !== "md") return false;
+
+    const dailyNotes = (this.app as any).internalPlugins?.getPluginById?.("daily-notes");
+    if (!dailyNotes?.enabled) return false;
+
+    const options = dailyNotes.instance?.options;
+    const format = options?.format || "YYYY-MM-DD";
+    const folder = options?.folder || "";
+
+    // 폴더 설정이 있으면 경로 확인
+    if (folder && file.parent?.path !== folder) return false;
+
+    // moment strict 파싱으로 파일명이 날짜 포맷과 일치하는지 확인
+    return (window as any).moment(file.basename, format, true).isValid();
   }
 
   private findLeafByContentEl(contentEl: HTMLElement): WorkspaceLeaf | null {

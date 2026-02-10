@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 
 # Exclude local mcp config file
 .mcp.json
+
+# Windows reserved device names
+nul

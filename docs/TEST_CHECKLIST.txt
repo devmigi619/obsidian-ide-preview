@@ -243,7 +243,7 @@ Modifier Key 동작
 
 포커스 관리
   ✓ 새 탭 생성 시 해당 탭으로 포커스 이동
-  ✓ 탭 닫기 시 탐색기 선택 상태 정리 (is-active, has-focus 제거, 2단계 #1 잔여)
+  ✓ 탭 닫기 시 탐색기 선택 상태 정리 (is-active, has-focus 제거) — 2단계 #1에서 해결
 
 
 ================================================================================
@@ -253,41 +253,26 @@ Modifier Key 동작
 알려진 버그 목록
 --------------------------------------------------------------------------------
 
-1. 더블클릭 → 탭닫기 → 싱글클릭 문제 (미해결)
+1. 더블클릭 → 탭닫기 → 싱글클릭 문제 (해결 ✓)
 --------------------------------------------------------------------------------
 
-현상:
-  1. 파일 탐색기에서 파일을 더블클릭으로 열기
-  2. 탐색기에 is-active(회색 블록) + has-focus(진회색 테두리) 표시됨
-  3. 아무 동작 없이 바로 탭을 닫기
-  4. 탐색기에 is-active와 has-focus가 잔류함
-  5. 이 상태에서 해당 파일을 싱글/더블클릭해도 아무 반응 없음 (이미 활성으로 인식)
+원래 현상 (Obsidian 기본 버그):
+  - 더블클릭으로 파일 열기 → 바로 탭 닫기 → is-active/has-focus 잔류
+  - 같은 파일 재클릭 시 아무 반응 없음
 
-임시 해결:
-  - 다른 파일을 한번 클릭해서 활성 해제하면 다시 정상 동작
+근본 원인:
+  - detach 후 Obsidian 워크스페이스 레벨 상태 문제로 file-open 이벤트 미발생
+  - 탐색기 내부 상태(activeDom, tree.activeDom) 문제가 아님
 
-재현 절차:
-  1. 파일 탐색기에서 "test.md" 더블클릭
-  2. "test.md"가 Permanent 탭으로 열림
-  3. 탐색기에서 "test.md"에 is-active + has-focus 표시 확인
-  4. 즉시 탭 닫기 (×) 클릭
-  5. 탐색기에서 "test.md"에 여전히 is-active + has-focus 표시됨
-  6. "test.md" 다시 클릭 → 반응 없음
+수정 내역:
+  ✓ 2단계 접근: detach 시 DOM 정리(Phase1+Phase2) + handleOpenFile에서 보정
+  ✓ ensureExplorerActiveState(): 파일 연 후 activeDom 불일치 시 onFileOpen(file) 강제 호출
+  ✓ clearSidebarInternalState(): detach 전 내부 상태 리셋
+  ✓ cleanStaleSidebarDOM(): detach 후 잔류 DOM 클래스 정리
 
-예상 원인:
-  - WorkspaceLeaf.detach 패치에서 clearAllSidebarSelections() 호출하고 있으나 완전히 해결되지 않음
-  - 더블클릭 시 설정된 상태가 탭 닫기 시 올바르게 정리되지 않음
-  - Obsidian 내부 상태와 DOM 상태 불일치
-
-관련 코드:
-  - main.ts:948-967 (WorkspaceLeaf.detach 패치)
-  - main.ts:1006-1049 (clearAllSidebarSelections)
-  - main.ts:1051-1054 (clearExplorerSelection)
-
-해결 방안 검토 필요:
-  ☐ 더블클릭 시점의 상태 추적 및 분석
-  ☐ detach 시점에 추가 정리 로직 필요 여부 확인
-  ☐ Obsidian 이벤트 순서 재검토
+핵심 교훈:
+  - "닫을 때 정리" 대신 "열 때 보정" 전략이 견고함
+  - onFileOpen(null)은 explorerView.activeDom만 초기화, tree.activeDom은 미초기화
 
 
 2. Daily Notes 판별 패턴 개선 (해결 ✓)

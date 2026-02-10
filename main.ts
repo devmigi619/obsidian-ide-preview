@@ -849,6 +849,7 @@ private analyzeCSSStyles() {
     this.markAsProcessed(leaf);
     const result = await originalMethod.call(leaf, file, openState);
     this.setAsPreview(leaf);
+    this.ensureExplorerActiveState(file, seq);
     this.debugFileExplorerState(`handleOpenFile 완료 (current tab preview) - ${file.path}`);
     return result;
   }
@@ -1011,15 +1012,18 @@ private analyzeCSSStyles() {
           console.log(`\n[${seq}] ▶▶▶ detach 시작`);
           console.log(`[${seq}]     닫히는 탭 leaf.id: ${leafId}`);
           console.log(`[${seq}]     닫히는 탭 filePath: ${filePath}`);
-          plugin.debugFileExplorerState(`detach 진입 (clearAllSidebarSelections 전)`);
 
-          plugin.clearAllSidebarSelections();
-
-          plugin.debugFileExplorerState(`clearAllSidebarSelections 완료`);
+          // Phase 1: detach 전 내부 상태 리셋
+          // → re-click 시 is-active 정상 적용을 위해 필수
+          plugin.clearSidebarInternalState(seq);
 
           const result = original.call(this);
 
-          plugin.debugFileExplorerState(`original detach 완료`);
+          // Phase 2: detach 후 잔류 DOM 클래스 정리
+          // → Obsidian 이벤트가 복원한 시각적 잔류물 제거
+          setTimeout(() => {
+            plugin.cleanStaleSidebarDOM(seq);
+          }, 0);
 
           return result;
         };
@@ -1367,53 +1371,80 @@ private analyzeCSSStyles() {
   }
 
   /**
-   * 사이드바의 파일 선택 상태 초기화
+   * Phase 1: detach 전 사이드바 내부 상태 리셋
+   * onFileOpen(null)로 내부 상태를 정리해야 re-click 시 is-active가 정상 적용됨
    */
-  private clearAllSidebarSelections() {
-    const seq = this.getNextSequence();
-    console.log(`\n[${seq}] ◇◇◇ clearAllSidebarSelections 실행`);
+  private clearSidebarInternalState(seq: number) {
+    console.log(`\n[${seq}] ◇ Phase1: clearSidebarInternalState`);
 
     const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
     const explorerView = explorerLeaves[0]?.view as any;
+    if (!explorerView) return;
 
-    if (!explorerView) {
-      console.log(`[${seq}]   → explorerView 없음, 스킵`);
-      return;
-    }
+    console.log(`[${seq}]   [BEFORE] activeDom: ${explorerView.activeDom?.file?.path ?? 'null'}, tree.activeDom: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}, focusedItem: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
 
-    // 상태 확인 (호출 전)
-    console.log(`[${seq}]   [BEFORE] explorerView.activeDom?.file?.path: ${explorerView.activeDom?.file?.path ?? 'null'}`);
-    console.log(`[${seq}]   [BEFORE] tree.activeDom?.file?.path: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}`);
-    console.log(`[${seq}]   [BEFORE] tree.focusedItem?.file?.path: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
-
-    // 1. onFileOpen(null) 호출 (explorerView.activeDom 초기화 + is-active 제거)
+    // 1. onFileOpen(null): explorerView.activeDom 초기화 + is-active 제거
     if (explorerView.onFileOpen) {
-      console.log(`[${seq}]   → onFileOpen(null) 호출`);
       explorerView.onFileOpen(null);
     }
-
-    // 2. tree.setFocusedItem(null) 호출 (has-focus 제거)
+    // 2. tree.activeDom 직접 초기화 (onFileOpen(null)이 이것을 지우지 않음)
+    if (explorerView.tree && explorerView.tree.activeDom !== null) {
+      explorerView.tree.activeDom = null;
+    }
+    // 3. has-focus 제거
     if (explorerView.tree?.setFocusedItem) {
-      console.log(`[${seq}]   → tree.setFocusedItem(null) 호출`);
       explorerView.tree.setFocusedItem(null);
     }
 
-    // 3. tree.activeDom도 초기화 (explorerView.activeDom과 일치시킴)
-    if (explorerView.tree && explorerView.tree.activeDom !== null) {
-      console.log(`[${seq}]   → tree.activeDom = null 설정`);
-      explorerView.tree.activeDom = null;
+    console.log(`[${seq}]   [AFTER] activeDom: ${explorerView.activeDom?.file?.path ?? 'null'}, tree.activeDom: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}, focusedItem: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
+  }
+
+  /**
+   * Phase 2: detach 후 잔류 DOM 클래스 정리 (setTimeout 내에서 호출)
+   * Obsidian 이벤트가 복원한 is-active/has-focus를 내부 상태와 비교하여 불일치 시 제거
+   */
+  private cleanStaleSidebarDOM(seq: number) {
+    console.log(`\n[${seq}] ◇ Phase2: cleanStaleSidebarDOM`);
+
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = explorerLeaves[0]?.view as any;
+    if (!explorerView) return;
+
+    // 내부 상태가 null인데 DOM에 is-active가 남아있으면 → 잔류물이므로 제거
+    if (!explorerView.activeDom && !explorerView.tree?.activeDom) {
+      const staleActive = explorerView.containerEl?.querySelectorAll('.tree-item-self.is-active');
+      if (staleActive?.length > 0) {
+        console.log(`[${seq}]   잔류 is-active ${staleActive.length}개 제거`);
+        staleActive.forEach((el: HTMLElement) => el.classList.remove('is-active'));
+      }
     }
 
-    // 상태 확인 (호출 후)
-    console.log(`[${seq}]   [AFTER] explorerView.activeDom?.file?.path: ${explorerView.activeDom?.file?.path ?? 'null'}`);
-    console.log(`[${seq}]   [AFTER] tree.activeDom?.file?.path: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}`);
-    console.log(`[${seq}]   [AFTER] tree.focusedItem?.file?.path: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
+    if (!explorerView.tree?.focusedItem) {
+      const staleFocus = explorerView.containerEl?.querySelectorAll('.tree-item-self.has-focus');
+      if (staleFocus?.length > 0) {
+        console.log(`[${seq}]   잔류 has-focus ${staleFocus.length}개 제거`);
+        staleFocus.forEach((el: HTMLElement) => el.classList.remove('has-focus'));
+      }
+    }
 
-    // DOM 상태 확인
-    const activeItems = document.querySelectorAll(".tree-item-self.is-active");
-    const focusedItems = document.querySelectorAll(".tree-item-self.has-focus");
-    console.log(`[${seq}]   [AFTER DOM] is-active 개수: ${activeItems.length}`);
-    console.log(`[${seq}]   [AFTER DOM] has-focus 개수: ${focusedItems.length}`);
+    console.log(`[${seq}]   완료 (activeDom: ${explorerView.activeDom?.file?.path ?? 'null'})`);
+  }
+
+  /**
+   * 파일을 연 뒤 탐색기의 is-active가 올바르게 적용되었는지 확인하고, 안 되었으면 보정
+   * file-open 이벤트가 발생하지 않는 경우(detach 후 재열기 등)에 대한 안전망
+   */
+  private ensureExplorerActiveState(file: TFile, seq: number) {
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = explorerLeaves[0]?.view as any;
+    if (!explorerView?.onFileOpen) return;
+
+    if (explorerView.activeDom?.file?.path === file.path) {
+      return; // 이미 올바르게 설정됨
+    }
+
+    console.log(`[${seq}]   ⚠ 탐색기 activeDom 불일치 → onFileOpen(${file.path}) 강제 호출`);
+    explorerView.onFileOpen(file);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

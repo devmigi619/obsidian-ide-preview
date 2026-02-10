@@ -676,6 +676,7 @@ ${"=".repeat(70)}`);
     this.markAsProcessed(leaf);
     const result = await originalMethod.call(leaf, file, openState);
     this.setAsPreview(leaf);
+    this.ensureExplorerActiveState(file, seq);
     this.debugFileExplorerState(`handleOpenFile \uC644\uB8CC (current tab preview) - ${file.path}`);
     return result;
   }
@@ -804,11 +805,11 @@ ${"=".repeat(70)}`);
 [${seq}] \u25B6\u25B6\u25B6 detach \uC2DC\uC791`);
           console.log(`[${seq}]     \uB2EB\uD788\uB294 \uD0ED leaf.id: ${leafId}`);
           console.log(`[${seq}]     \uB2EB\uD788\uB294 \uD0ED filePath: ${filePath}`);
-          plugin.debugFileExplorerState(`detach \uC9C4\uC785 (clearAllSidebarSelections \uC804)`);
-          plugin.clearAllSidebarSelections();
-          plugin.debugFileExplorerState(`clearAllSidebarSelections \uC644\uB8CC`);
+          plugin.clearSidebarInternalState(seq);
           const result = original.call(this);
-          plugin.debugFileExplorerState(`original detach \uC644\uB8CC`);
+          setTimeout(() => {
+            plugin.cleanStaleSidebarDOM(seq);
+          }, 0);
           return result;
         };
       }
@@ -1107,41 +1108,72 @@ ${"=".repeat(70)}`);
     });
   }
   /**
-   * 사이드바의 파일 선택 상태 초기화
+   * Phase 1: detach 전 사이드바 내부 상태 리셋
+   * onFileOpen(null)로 내부 상태를 정리해야 re-click 시 is-active가 정상 적용됨
    */
-  clearAllSidebarSelections() {
+  clearSidebarInternalState(seq) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x;
-    const seq = this.getNextSequence();
     console.log(`
-[${seq}] \u25C7\u25C7\u25C7 clearAllSidebarSelections \uC2E4\uD589`);
+[${seq}] \u25C7 Phase1: clearSidebarInternalState`);
     const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
     const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
-    if (!explorerView) {
-      console.log(`[${seq}]   \u2192 explorerView \uC5C6\uC74C, \uC2A4\uD0B5`);
+    if (!explorerView)
       return;
-    }
-    console.log(`[${seq}]   [BEFORE] explorerView.activeDom?.file?.path: ${(_d = (_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path) != null ? _d : "null"}`);
-    console.log(`[${seq}]   [BEFORE] tree.activeDom?.file?.path: ${(_h = (_g = (_f = (_e = explorerView.tree) == null ? void 0 : _e.activeDom) == null ? void 0 : _f.file) == null ? void 0 : _g.path) != null ? _h : "null"}`);
-    console.log(`[${seq}]   [BEFORE] tree.focusedItem?.file?.path: ${(_l = (_k = (_j = (_i = explorerView.tree) == null ? void 0 : _i.focusedItem) == null ? void 0 : _j.file) == null ? void 0 : _k.path) != null ? _l : "null"}`);
+    console.log(`[${seq}]   [BEFORE] activeDom: ${(_d = (_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path) != null ? _d : "null"}, tree.activeDom: ${(_h = (_g = (_f = (_e = explorerView.tree) == null ? void 0 : _e.activeDom) == null ? void 0 : _f.file) == null ? void 0 : _g.path) != null ? _h : "null"}, focusedItem: ${(_l = (_k = (_j = (_i = explorerView.tree) == null ? void 0 : _i.focusedItem) == null ? void 0 : _j.file) == null ? void 0 : _k.path) != null ? _l : "null"}`);
     if (explorerView.onFileOpen) {
-      console.log(`[${seq}]   \u2192 onFileOpen(null) \uD638\uCD9C`);
       explorerView.onFileOpen(null);
     }
-    if ((_m = explorerView.tree) == null ? void 0 : _m.setFocusedItem) {
-      console.log(`[${seq}]   \u2192 tree.setFocusedItem(null) \uD638\uCD9C`);
-      explorerView.tree.setFocusedItem(null);
-    }
     if (explorerView.tree && explorerView.tree.activeDom !== null) {
-      console.log(`[${seq}]   \u2192 tree.activeDom = null \uC124\uC815`);
       explorerView.tree.activeDom = null;
     }
-    console.log(`[${seq}]   [AFTER] explorerView.activeDom?.file?.path: ${(_p = (_o = (_n = explorerView.activeDom) == null ? void 0 : _n.file) == null ? void 0 : _o.path) != null ? _p : "null"}`);
-    console.log(`[${seq}]   [AFTER] tree.activeDom?.file?.path: ${(_t = (_s = (_r = (_q = explorerView.tree) == null ? void 0 : _q.activeDom) == null ? void 0 : _r.file) == null ? void 0 : _s.path) != null ? _t : "null"}`);
-    console.log(`[${seq}]   [AFTER] tree.focusedItem?.file?.path: ${(_x = (_w = (_v = (_u = explorerView.tree) == null ? void 0 : _u.focusedItem) == null ? void 0 : _v.file) == null ? void 0 : _w.path) != null ? _x : "null"}`);
-    const activeItems = document.querySelectorAll(".tree-item-self.is-active");
-    const focusedItems = document.querySelectorAll(".tree-item-self.has-focus");
-    console.log(`[${seq}]   [AFTER DOM] is-active \uAC1C\uC218: ${activeItems.length}`);
-    console.log(`[${seq}]   [AFTER DOM] has-focus \uAC1C\uC218: ${focusedItems.length}`);
+    if ((_m = explorerView.tree) == null ? void 0 : _m.setFocusedItem) {
+      explorerView.tree.setFocusedItem(null);
+    }
+    console.log(`[${seq}]   [AFTER] activeDom: ${(_p = (_o = (_n = explorerView.activeDom) == null ? void 0 : _n.file) == null ? void 0 : _o.path) != null ? _p : "null"}, tree.activeDom: ${(_t = (_s = (_r = (_q = explorerView.tree) == null ? void 0 : _q.activeDom) == null ? void 0 : _r.file) == null ? void 0 : _s.path) != null ? _t : "null"}, focusedItem: ${(_x = (_w = (_v = (_u = explorerView.tree) == null ? void 0 : _u.focusedItem) == null ? void 0 : _v.file) == null ? void 0 : _w.path) != null ? _x : "null"}`);
+  }
+  /**
+   * Phase 2: detach 후 잔류 DOM 클래스 정리 (setTimeout 내에서 호출)
+   * Obsidian 이벤트가 복원한 is-active/has-focus를 내부 상태와 비교하여 불일치 시 제거
+   */
+  cleanStaleSidebarDOM(seq) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    console.log(`
+[${seq}] \u25C7 Phase2: cleanStaleSidebarDOM`);
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
+    if (!explorerView)
+      return;
+    if (!explorerView.activeDom && !((_b = explorerView.tree) == null ? void 0 : _b.activeDom)) {
+      const staleActive = (_c = explorerView.containerEl) == null ? void 0 : _c.querySelectorAll(".tree-item-self.is-active");
+      if ((staleActive == null ? void 0 : staleActive.length) > 0) {
+        console.log(`[${seq}]   \uC794\uB958 is-active ${staleActive.length}\uAC1C \uC81C\uAC70`);
+        staleActive.forEach((el) => el.classList.remove("is-active"));
+      }
+    }
+    if (!((_d = explorerView.tree) == null ? void 0 : _d.focusedItem)) {
+      const staleFocus = (_e = explorerView.containerEl) == null ? void 0 : _e.querySelectorAll(".tree-item-self.has-focus");
+      if ((staleFocus == null ? void 0 : staleFocus.length) > 0) {
+        console.log(`[${seq}]   \uC794\uB958 has-focus ${staleFocus.length}\uAC1C \uC81C\uAC70`);
+        staleFocus.forEach((el) => el.classList.remove("has-focus"));
+      }
+    }
+    console.log(`[${seq}]   \uC644\uB8CC (activeDom: ${(_h = (_g = (_f = explorerView.activeDom) == null ? void 0 : _f.file) == null ? void 0 : _g.path) != null ? _h : "null"})`);
+  }
+  /**
+   * 파일을 연 뒤 탐색기의 is-active가 올바르게 적용되었는지 확인하고, 안 되었으면 보정
+   * file-open 이벤트가 발생하지 않는 경우(detach 후 재열기 등)에 대한 안전망
+   */
+  ensureExplorerActiveState(file, seq) {
+    var _a, _b, _c;
+    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+    const explorerView = (_a = explorerLeaves[0]) == null ? void 0 : _a.view;
+    if (!(explorerView == null ? void 0 : explorerView.onFileOpen))
+      return;
+    if (((_c = (_b = explorerView.activeDom) == null ? void 0 : _b.file) == null ? void 0 : _c.path) === file.path) {
+      return;
+    }
+    console.log(`[${seq}]   \u26A0 \uD0D0\uC0C9\uAE30 activeDom \uBD88\uC77C\uCE58 \u2192 onFileOpen(${file.path}) \uAC15\uC81C \uD638\uCD9C`);
+    explorerView.onFileOpen(file);
   }
   // ─────────────────────────────────────────────────────────────────────────
   // 유틸리티

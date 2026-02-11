@@ -142,9 +142,11 @@ function onFileOpen(file) {
 ```
 
 **핵심 포인트:**
-- `onFileOpen(null)` 호출 시 선택 상태가 완전히 초기화됨
-- `activeDom`, `tree.activeDom`, `is-active` 클래스가 모두 일관되게 처리됨
-- 이것이 Obsidian의 **공식 선택 상태 초기화 방법**
+- `onFileOpen(file)` 호출 시 `activeDom`과 `tree.activeDom`을 동기화
+- 단, `newItem !== this.activeDom` 조건이므로 **이미 같은 상태면 아무 동작 안 함**
+  - 예: `activeDom`이 이미 `null`일 때 `onFileOpen(null)` → tree.activeDom 미변경
+- 실제 관찰: `onFileOpen(null)` 후 `tree.activeDom`이 남아있는 경우 있음
+  - 해결: 코드에서 `onFileOpen(null)` 후 `tree.activeDom = null` 명시적 설정
 
 ---
 
@@ -195,20 +197,37 @@ function setFocusedItem(item, scrollIntoView = true) {
 
 ## 핵심 원칙
 
-**"Obsidian 내부 상태를 직접 조작하지 말고, 공식 메서드를 사용하라"**
+**"가능한 한 공식 메서드를 사용하되, 필요 시 직접 보정한다"**
 
-| 작업 | ❌ 잘못된 방법 | ✅ 올바른 방법 |
-|------|---------------|---------------|
-| 선택 해제 | `activeDom = null` | `explorerView.onFileOpen(null)` |
-| 포커스 해제 | `focusedItem = null` | `tree.setFocusedItem(null)` |
-| 다중선택 해제 | `selectedDoms.clear()` | `tree.clearSelectedDoms()` |
-| DOM 클래스 제거 | `classList.remove('is-active')` | 공식 메서드 사용 |
+| 작업 | 우선 방법 | 보조 방법 (필요 시) |
+|------|-----------|-------------------|
+| 선택 해제 | `explorerView.onFileOpen(null)` | `tree.activeDom = null` (onFileOpen이 미초기화 시) |
+| 포커스 해제 | `tree.setFocusedItem(null)` | - |
+| 다중선택 해제 | `tree.clearSelectedDoms()` | - |
+| DOM 클래스 정리 | 공식 메서드 사용 | 내부 상태 null인데 DOM 잔류 시 직접 제거 |
 
-**이유**: 직접 조작 시 내부 상태(`activeDom`, `tree.activeDom`, DOM 클래스)가 불일치하여 예상치 못한 버그 발생
+**원칙**:
+- 공식 메서드 우선 사용으로 내부 상태 일관성 유지
+- `onFileOpen(null)`이 `tree.activeDom`을 초기화하지 않는 경우가 있으므로, 필요 시 직접 보정
+- "원인을 고치려 하지 말고 결과를 확인하고 보정" 전략이 Obsidian API에서 효과적
 
 ---
 
 ## 중요 참고사항
+
+### setPinned 패치
+
+**역할**: 탭 고정(Pin) 시 Preview → Permanent 자동 승격
+
+```typescript
+// patchSetPinned: 탭을 고정하면 Preview가 Permanent로 승격
+if (pinned && plugin.previewLeaves.has(this)) {
+  plugin.promoteToPermanent(this);
+}
+```
+
+- Obsidian의 "탭 고정" 기능 사용 시 Preview 탭이 Permanent로 자동 전환
+- 고정 해제 시에는 아무 동작 없음 (Permanent 유지)
 
 ### openState.eState mutation 문제
 
@@ -324,7 +343,7 @@ if (file.extension === "canvas" || file.extension === "pdf") {
 **해결**: `lastActiveLeaf` 상태 변수로 "가장 최근 활성 파일" 추적
 
 ```typescript
-// main.ts:1093-1094 (2026-02-09 수정: PDF 추가)
+// registerFileOpenHandler() 내 file-open 이벤트 핸들러
 const viewType = activeLeaf?.view?.getViewType();
 if (viewType === "markdown" || viewType === "canvas" || viewType === "pdf") {
   this.lastActiveLeaf = activeLeaf;  // MD, Canvas, PDF 추적
@@ -333,12 +352,12 @@ if (viewType === "markdown" || viewType === "canvas" || viewType === "pdf") {
 
 #### 더블클릭 시나리오 5가지
 
-| 시나리오 | 위치 | 동작 | lastActiveLeaf 사용 여부 |
-|---------|------|------|------------------------|
-| **1. 탭 헤더 더블클릭** | Line 1189-1195 | 현재 활성 탭 승격 | ❌ (activeLeaf 직접 사용) |
-| **2. 사이드바 더블클릭** | Line 1198-1207 | lastActiveLeaf 승격 | ✅ |
-| **3. 그래프 뷰 더블클릭** | Line 1210-1215 | lastActiveLeaf 승격 | ✅ |
-| **4. 리본 버튼 더블클릭** | Line 1218-1254 | 활성 탭 또는 플래그 설정 | ⚠️ (혼합) |
+| 시나리오 | 메서드 | 동작 | lastActiveLeaf 사용 여부 |
+|---------|--------|------|------------------------|
+| **1. 탭 헤더 더블클릭** | `handleDoubleClick` | 현재 활성 탭 승격 | ❌ (activeLeaf 직접 사용) |
+| **2. 사이드바 더블클릭** | `handleDoubleClick` | lastActiveLeaf 승격 | ✅ |
+| **3. 그래프 뷰 더블클릭** | `handleDoubleClick` | lastActiveLeaf 승격 | ✅ |
+| **4. 리본 버튼 더블클릭** | `handleDoubleClick` | 활성 탭 또는 플래그 설정 | ⚠️ (혼합) |
 
 #### 타이밍 흐름
 
@@ -357,17 +376,17 @@ T4: 더블클릭 핸들러 → lastActiveLeaf 확인 → 승격
 3. 탭 헤더 더블클릭만 작동 (activeLeaf 직접 사용)
 
 **해결 (수정 후)**:
-- PDF도 `lastActiveLeaf`에 포함 (Line 1094)
+- PDF도 `lastActiveLeaf`에 포함 (`registerFileOpenHandler()` 내 viewType 체크)
 - 모든 더블클릭 시나리오에서 PDF 승격 작동
 
 #### 핵심 코드 위치
 
-- `lastActiveLeaf` 선언: Line 123-124
-- 업데이트 트리거: Line 1083-1097 (`file-open` 이벤트)
-- MD/Canvas 필터: Line 1093-1094
-- 더블클릭 핸들러: Line 1186-1255
-- 사이드바 처리: Line 1198-1207 (lastActiveLeaf 사용)
-- 탭 헤더 처리: Line 1189-1195 (activeLeaf 직접 사용)
+- `lastActiveLeaf` 선언: 클래스 상태 필드
+- 업데이트 트리거: `registerFileOpenHandler()` → `file-open` 이벤트
+- MD/Canvas/PDF 필터: `file-open` 핸들러 내 viewType 체크
+- 더블클릭 핸들러: `handleDoubleClick()`
+- 사이드바 처리: `handleDoubleClick()` 내 sidebarContent 분기 (lastActiveLeaf 사용)
+- 탭 헤더 처리: `handleDoubleClick()` 내 workspace-tab-header 분기 (activeLeaf 직접 사용)
 
 ### 용어 주의사항
 

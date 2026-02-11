@@ -5,38 +5,29 @@ import {
   FileView,
   Notice,
   WorkspaceSplit,
-  App,
-  PluginSettingTab,
-  Setting,
 } from "obsidian";
 import { around } from "monkey-around";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 플러그인 설정
+// Type Definitions / 타입 정의
 // ═══════════════════════════════════════════════════════════════════════════
 
-interface IDEStylePreviewSettings {
-  debugMode: boolean;
-}
-
-const DEFAULT_SETTINGS: IDEStylePreviewSettings = {
-  debugMode: false
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 타입 정의
-// ═══════════════════════════════════════════════════════════════════════════
-
-/** 탭의 상태 */
+/** Tab state / 탭 상태 */
 type TabState = "empty" | "preview" | "permanent";
 
-/** Leaf의 위치 */
+/** Leaf location / 탭 위치 */
 type LeafLocation = "sidebar" | "main";
 
-/** 파일 열기 의도 */
+/** File open intent / 파일 열기 의도 */
 type OpenIntent = "browse" | "create";
 
-/** 내부 API 타입 (Obsidian이 노출하지 않는 타입) */
+/** Original openFile method signature / openFile 원본 메서드 시그니처 */
+type OpenFileFn = (file: TFile, openState?: any) => Promise<void>;
+
+/** Original setViewState method signature / setViewState 원본 메서드 시그니처 */
+type SetViewStateFn = (viewState: any, eState?: any) => Promise<void>;
+
+/** Internal Leaf properties (not exposed by Obsidian) / Obsidian이 노출하지 않는 Leaf 내부 속성 */
 interface InternalLeaf {
   id?: string;
   tabHeaderEl?: HTMLElement;
@@ -52,28 +43,61 @@ interface InternalWorkspace {
   rightSplit: WorkspaceSplit;
 }
 
+/**
+ * File explorer view internal structure / 파일 탐색기 뷰 내부 구조
+ * Note: explorerView.activeDom and tree.activeDom are separate objects synced by onFileOpen
+ * 참고: explorerView.activeDom과 tree.activeDom은 별개 객체이며 onFileOpen이 동기화함
+ */
+interface ExplorerView {
+  activeDom: { file?: TFile; selfEl?: HTMLElement } | null;
+  tree?: {
+    activeDom: any;
+    focusedItem: any;
+    setFocusedItem?: (item: any) => void;
+  };
+  containerEl?: HTMLElement;
+  onFileOpen?: (file: TFile | null) => void;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 설정
+// Constants / 상수
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CONFIG = {
-  /** 인라인 제목 변경 시 파일명 반영 대기 시간 */
+  /** Debounce delay for inline title rename / 인라인 제목 변경 시 파일명 반영 대기 시간 */
   TITLE_RENAME_DEBOUNCE_MS: 300,
 
-  /** CSS 클래스명 */
-  CSS_CLASSES: {
-    PREVIEW_TAB: "is-preview-tab",
-    ACTIVE: "is-active",
-    HAS_FOCUS: "has-focus",
+  /** Min pixel distance to distinguish drag from click in graph view / 그래프뷰에서 드래그와 클릭을 구분하는 최소 px 거리 */
+  GRAPH_DRAG_THRESHOLD: 10,
+
+  VIEW_TYPES: {
+    EMPTY: "empty",
+    MARKDOWN: "markdown",
+    CANVAS: "canvas",
+    PDF: "pdf",
+    GRAPH: "graph",
+    FILE_EXPLORER: "file-explorer",
   },
 
-  /** 로그 프리픽스 */
+  CSS_CLASSES: {
+    PREVIEW_TAB: "is-preview-tab",
+  },
+
+  CSS_SELECTORS: {
+    TAB_HEADER: ".workspace-tab-header",
+    LEAF_CONTENT: ".workspace-leaf-content",
+    GRAPH_CONTAINER: ".graph-view-container",
+    RIBBON_ACTION: ".side-dock-ribbon-action",
+    INLINE_TITLE: ".inline-title",
+    STALE_ACTIVE: ".tree-item-self.is-active",
+    STALE_FOCUS: ".tree-item-self.has-focus",
+  },
+
   LOG_PREFIX: "[IDE Preview]",
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 유틸리티 함수
+// Utility / 유틸리티
 // ═══════════════════════════════════════════════════════════════════════════
 
 function log(message: string, ...args: unknown[]) {
@@ -81,416 +105,72 @@ function log(message: string, ...args: unknown[]) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 메인 플러그인
+// Main Plugin / 메인 플러그인
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * IDE Style Preview Plugin
  *
- * VS Code 스타일의 Preview 탭 동작을 Obsidian에 구현
- * - 탐색(싱글 클릭): Preview 탭 (이탤릭, 재사용됨)
- * - 확정(더블 클릭/편집): Permanent 탭
+ * Implements VS Code-style preview tab behavior in Obsidian.
+ * Obsidian에 VS Code 스타일의 Preview 탭 동작을 구현합니다.
+ *
+ * - Browse (single click): Preview tab (italic, reusable) / 탐색(싱글클릭): Preview 탭 (이탤릭, 재사용)
+ * - Commit (double click/edit): Permanent tab / 확정(더블클릭/편집): Permanent 탭
  */
 export default class IDEStylePreviewPlugin extends Plugin {
   // ─────────────────────────────────────────────────────────────────────────
-  // 상태
+  // State / 상태
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** 플러그인 설정 */
-  settings!: IDEStylePreviewSettings;
-
-  /** Preview 상태인 탭들 */
+  /** Leaves currently in preview state / Preview 상태인 탭들 */
   private previewLeaves = new WeakSet<WorkspaceLeaf>();
 
+  /** Leaves already handled by openFile (prevents setViewState double-processing) */
   /** openFile에서 이미 처리한 탭 (setViewState 중복 방지) */
   private processedByOpenFile = new WeakSet<WorkspaceLeaf>();
 
-  /** Ctrl+Click 감지 플래그 */
+  /** Ctrl/Cmd+Click detection flag / Ctrl+Click 감지 플래그 */
   private isCtrlClickPending = false;
 
+  /** Expected view type for ribbon double-click promotion (null = inactive) */
   /** 리본 버튼 더블클릭 시 기대하는 뷰 타입 (null이면 비활성) */
   private ribbonDoubleClickExpectedViewType: string | null = null;
 
-  /** 그래프 뷰 드래그 감지용 */
+  /** Graph view drag detection / 그래프 뷰 드래그 감지용 */
   private graphDragStartPos: { x: number; y: number } | null = null;
 
-  /** 새로 생성된 파일들 (제목편집모드 통일용) */
+  /** Newly created files awaiting title-edit mode / 새로 생성된 파일들 (제목편집모드 통일용) */
   private newlyCreatedFiles = new Set<string>();
 
-  /** 가장 최근에 열린 leaf */
+  /** Most recently opened leaf (for double-click promotion in sidebar/graph) */
+  /** 가장 최근에 열린 leaf (사이드바/그래프 더블클릭 승격 시 사용) */
   private lastActiveLeaf: WorkspaceLeaf | null = null;
 
-  /** 제목 변경 debounce 타이머 */
+  /** Inline title rename debounce timer / 제목 변경 debounce 타이머 */
   private titleRenameTimer: number | null = null;
 
-  /** 패치 해제 함수들 */
+  /** Patch cleanup functions / 패치 해제 함수들 */
   private cleanupFunctions: (() => void)[] = [];
 
-  /** 디버그용: 이벤트 시퀀스 카운터 */
-  private eventSequence = 0;
-
-  /** 디버그용: MutationObserver */
-  private debugObserver: MutationObserver | null = null;
-
-  /** 디버그용: 마지막 hover된 경로 */
-  private lastHoveredPath: string | null = null;
-
   // ─────────────────────────────────────────────────────────────────────────
-  // 라이프사이클
+  // Lifecycle / 라이프사이클
   // ─────────────────────────────────────────────────────────────────────────
 
   async onload() {
-    await this.loadSettings();
     log("Plugin loaded");
-
-    this.app.workspace.onLayoutReady(() => {
-      // 디버그 모드가 켜져 있을 때만 포괄적 디버그 시작
-      if (this.settings.debugMode) {
-        this.setupComprehensiveDebug();
-      }
-    });
-
     this.installPatches();
     this.registerEventHandlers();
-
-    // 설정 탭 추가
-    this.addSettingTab(new IDEStylePreviewSettingTab(this.app, this));
   }
 
   onunload() {
-    // 디버그 Observer 정리
-    if (this.debugObserver) {
-      this.debugObserver.disconnect();
-      this.debugObserver = null;
-    }
-
     this.cleanupFunctions.forEach((cleanup) => cleanup());
     this.cleanupFunctions = [];
-
     this.removeAllPreviewStyles();
-
     log("Plugin unloaded");
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 포괄적 디버그 시스템
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * 포괄적인 디버그 설정
-   * 1. DOM 클래스 변화 실시간 추적 (MutationObserver)
-   * 2. 마우스 이벤트 추적 (hover 동작 파악)
-   * 3. CSS 스타일 분석 (hover vs is-active)
-   */
-  private setupComprehensiveDebug() {
-    console.log("\n" + "=".repeat(70));
-    console.log("★★★ 포괄적 디버그 모드 시작 ★★★");
-    console.log("=".repeat(70));
-
-    this.setupDOMMutationObserver();
-    this.setupMouseEventTracking();
-    this.analyzeCSSStyles();
-    this.setupWorkspaceEventTracking();
-
-    console.log("\n" + "=".repeat(70));
-    console.log("디버그 모드 준비 완료 - 이제 테스트를 시작하세요");
-    console.log("=".repeat(70) + "\n");
-  }
-
-  /**
-   * 1. DOM 클래스 변화 실시간 추적
-   */
-  private setupDOMMutationObserver() {
-    const leftSidebar = document.querySelector(".workspace-split.mod-left-split");
-    if (!leftSidebar) {
-      console.log("[DEBUG] 왼쪽 사이드바를 찾을 수 없음");
-      return;
-    }
-
-    this.debugObserver = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        if (mutation.type === "attributes" && mutation.attributeName === "class") {
-          const target = mutation.target as HTMLElement;
-
-          // tree-item-self 또는 nav-file-title 요소만 추적
-          if (target.classList.contains("tree-item-self") ||
-              target.classList.contains("nav-file-title")) {
-
-            const oldValue = mutation.oldValue || "";
-            const newValue = target.className;
-
-            if (oldValue !== newValue) {
-              const path = target.getAttribute("data-path") ||
-                           target.closest("[data-path]")?.getAttribute("data-path") ||
-                           "unknown";
-
-              // 추가/제거된 클래스 계산
-              const oldClasses = new Set(oldValue.split(" ").filter(Boolean));
-              const newClasses = new Set(newValue.split(" ").filter(Boolean));
-
-              const added: string[] = [];
-              const removed: string[] = [];
-
-              newClasses.forEach(c => {
-                if (!oldClasses.has(c)) added.push(c);
-              });
-              oldClasses.forEach(c => {
-                if (!newClasses.has(c)) removed.push(c);
-              });
-
-              // 관련 변화만 로그 (is-active, has-focus, is-selected 등)
-              const isRelevant = added.some(c => 
-                c.includes("active") || c.includes("focus") || c.includes("selected")
-              ) || removed.some(c => 
-                c.includes("active") || c.includes("focus") || c.includes("selected")
-              );
-
-              if (isRelevant) {
-                const timestamp = new Date().toISOString().substr(11, 12);
-                console.log(`\n[DOM변화] ${timestamp} | ${path}`);
-                if (added.length > 0) console.log(`  ✚ 추가: ${added.join(", ")}`);
-                if (removed.length > 0) console.log(`  ✖ 제거: ${removed.join(", ")}`);
-                console.log(`  현재: ${newValue}`);
-
-                // 스택 트레이스 (어디서 변경되었는지 추적)
-                console.log(`  호출 스택:`);
-                const stack = new Error().stack?.split("\n").slice(2, 6).join("\n    ");
-                console.log(`    ${stack}`);
-              }
-            }
-          }
-        }
-      });
-    });
-
-    this.debugObserver.observe(leftSidebar, {
-      attributes: true,
-      attributeOldValue: true,
-      subtree: true,
-      attributeFilter: ["class"]
-    });
-
-    console.log("[DEBUG] MutationObserver 설정 완료 - 클래스 변화 추적 중");
-  }
-
-  /**
-   * 2. 마우스 이벤트 추적 (hover 동작 파악)
-   */
-  private setupMouseEventTracking() {
-    // mouseover
-    this.registerDomEvent(document, "mouseover", (evt: MouseEvent) => {
-      const target = evt.target as HTMLElement;
-      const fileEl = target.closest(".tree-item-self, .nav-file-title") as HTMLElement;
-
-      if (fileEl) {
-        const path = fileEl.getAttribute("data-path") ||
-                     fileEl.closest("[data-path]")?.getAttribute("data-path");
-
-        if (path && path !== this.lastHoveredPath) {
-          this.lastHoveredPath = path;
-          const timestamp = new Date().toISOString().substr(11, 12);
-          
-          // computed style 확인
-          const computedStyle = window.getComputedStyle(fileEl);
-          const bgColor = computedStyle.backgroundColor;
-          
-          console.log(`[HOVER IN] ${timestamp} | ${path}`);
-          console.log(`  클래스: ${fileEl.className}`);
-          console.log(`  background-color: ${bgColor}`);
-        }
-      }
-    }, true);
-
-    // mouseout
-    this.registerDomEvent(document, "mouseout", (evt: MouseEvent) => {
-      const target = evt.target as HTMLElement;
-      const fileEl = target.closest(".tree-item-self, .nav-file-title") as HTMLElement;
-
-      if (fileEl) {
-        const path = fileEl.getAttribute("data-path") ||
-                     fileEl.closest("[data-path]")?.getAttribute("data-path");
-
-        if (path && path === this.lastHoveredPath) {
-          const timestamp = new Date().toISOString().substr(11, 12);
-          console.log(`[HOVER OUT] ${timestamp} | ${path}`);
-          console.log(`  클래스: ${fileEl.className}`);
-
-          // 50ms 후 background-color 재확인 (hover 해제 후)
-          setTimeout(() => {
-            const computedStyle = window.getComputedStyle(fileEl);
-            console.log(`  (50ms 후) background-color: ${computedStyle.backgroundColor}`);
-            console.log(`  (50ms 후) 클래스: ${fileEl.className}`);
-          }, 50);
-
-          this.lastHoveredPath = null;
-        }
-      }
-    }, true);
-
-    console.log("[DEBUG] 마우스 이벤트 리스너 설정 완료");
-  }
-
-  /**
- * 3. CSS 스타일 분석
- */
-private analyzeCSSStyles() {
-  console.log("\n[CSS 분석] hover와 is-active 관련 스타일:");
-
-  const relevantPatterns = [
-    ".is-active",
-    ":hover",
-    ".has-focus",
-    ".nav-file-title",
-    ".tree-item-self"
-  ];
-
-  const foundRules: { selector: string; bg: string; source: string }[] = [];
-
-  // StyleSheetList를 Array로 변환
-  const sheets = Array.from(document.styleSheets);
-  
-  for (const sheet of sheets) {
-    try {
-      const rules = sheet.cssRules || sheet.rules;
-      if (!rules) continue;
-      
-      const source = sheet.href || "inline";
-
-      // CSSRuleList도 Array로 변환
-      const ruleArray = Array.from(rules);
-      
-      for (const rule of ruleArray) {
-        if (rule instanceof CSSStyleRule) {
-          const selector = rule.selectorText;
-          
-          // 관련 셀렉터인지 확인
-          const isRelevant = relevantPatterns.some(p => selector.includes(p));
-          
-          if (isRelevant) {
-            // background 관련 스타일 확인
-            const bgColor = rule.style.backgroundColor;
-            const bg = rule.style.background;
-            
-            if (bgColor || bg) {
-              foundRules.push({
-                selector,
-                bg: bgColor || bg,
-                source: source.split("/").pop() || source
-              });
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // Cross-origin 스타일시트 - 무시
-    }
-  }
-
-  // 정렬하여 출력
-  foundRules.sort((a, b) => a.selector.localeCompare(b.selector));
-  foundRules.forEach(r => {
-    console.log(`  [${r.source}] ${r.selector}`);
-    console.log(`    → ${r.bg}`);
-  });
-
-  if (foundRules.length === 0) {
-    console.log("  (관련 CSS 규칙을 찾을 수 없음 - CSS 변수 사용 가능성)");
-  }
-
-  // CSS 변수 확인
-  console.log("\n[CSS 변수] 배경 관련 변수:");
-  const root = document.documentElement;
-  const computedRoot = window.getComputedStyle(root);
-  
-  const bgVars = [
-    "--background-modifier-hover",
-    "--background-modifier-active-hover",
-    "--nav-item-background-hover",
-    "--nav-item-background-active",
-    "--interactive-hover",
-    "--interactive-accent"
-  ];
-
-  bgVars.forEach(varName => {
-    const value = computedRoot.getPropertyValue(varName);
-    if (value) {
-      console.log(`  ${varName}: ${value.trim()}`);
-    }
-  });
-}
-
-  /**
-   * 4. 워크스페이스 이벤트 추적
-   */
-  private setupWorkspaceEventTracking() {
-    // active-leaf-change
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", (leaf) => {
-        const timestamp = new Date().toISOString().substr(11, 12);
-        console.log(`\n[EVENT: active-leaf-change] ${timestamp}`);
-        
-        if (leaf) {
-          const leafId = this.getLeafDebugId(leaf);
-          const viewType = leaf.view?.getViewType() ?? "null";
-          const filePath = this.getFilePath(leaf);
-          
-          console.log(`  leaf.id: ${leafId}`);
-          console.log(`  viewType: ${viewType}`);
-          console.log(`  filePath: ${filePath ?? "null"}`);
-        } else {
-          console.log(`  leaf: null`);
-        }
-
-        this.logExplorerState("active-leaf-change 후");
-      })
-    );
-
-    // layout-change
-    this.registerEvent(
-      this.app.workspace.on("layout-change", () => {
-        const timestamp = new Date().toISOString().substr(11, 12);
-        console.log(`\n[EVENT: layout-change] ${timestamp}`);
-        this.logExplorerState("layout-change 후");
-      })
-    );
-
-    console.log("[DEBUG] 워크스페이스 이벤트 리스너 설정 완료");
-  }
-
-  /**
-   * File Explorer 상태 간단 로깅
-   */
-  private logExplorerState(context: string) {
-    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
-    const explorerView = explorerLeaves[0]?.view as any;
-
-    console.log(`  [Explorer 상태] ${context}`);
-    
-    if (explorerView) {
-      console.log(`    activeDom?.file?.path: ${explorerView.activeDom?.file?.path ?? "null"}`);
-      console.log(`    tree.activeDom?.file?.path: ${explorerView.tree?.activeDom?.file?.path ?? "null"}`);
-      console.log(`    tree.focusedItem?.file?.path: ${explorerView.tree?.focusedItem?.file?.path ?? "null"}`);
-    }
-
-    // DOM 상태
-    const activeEls = document.querySelectorAll(".tree-item-self.is-active, .nav-file-title.is-active");
-    const focusEls = document.querySelectorAll(".tree-item-self.has-focus, .nav-file-title.has-focus");
-    
-    console.log(`    DOM is-active: ${activeEls.length}개`);
-    activeEls.forEach(el => {
-      const path = el.getAttribute("data-path") || el.closest("[data-path]")?.getAttribute("data-path");
-      console.log(`      - ${path}`);
-    });
-    
-    console.log(`    DOM has-focus: ${focusEls.length}개`);
-    focusEls.forEach(el => {
-      const path = el.getAttribute("data-path") || el.closest("[data-path]")?.getAttribute("data-path");
-      console.log(`      - ${path}`);
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // 기존 디버깅 함수들
+  // Patch Installation / 패치 설치
   // ─────────────────────────────────────────────────────────────────────────
 
   private installPatches() {
@@ -507,112 +187,12 @@ private analyzeCSSStyles() {
     this.registerPromotionTriggers();
   }
 
-  private getNextSequence(): number {
-    return ++this.eventSequence;
-  }
-
-  /**
-   * File Explorer의 내부 상태와 DOM 상태를 상세히 출력 (모두 펼쳐서)
-   */
-  private debugFileExplorerState(context: string) {
-    const seq = this.getNextSequence();
-    const timestamp = new Date().toISOString().substr(11, 12);
-    
-    console.log(`\n${"=".repeat(70)}`);
-    console.log(`[${seq}] ${timestamp} | ${CONFIG.LOG_PREFIX} ${context}`);
-    console.log(`${"=".repeat(70)}`);
-
-    // 1. File Explorer View 가져오기
-    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
-    const explorerView = explorerLeaves[0]?.view as any;
-
-    console.log(`[${seq}] 1. File Explorer View 존재: ${!!explorerView}`);
-
-    if (explorerView) {
-      // 2. activeDom 상태 (펼쳐서)
-      const activeDom = explorerView.activeDom;
-      console.log(`[${seq}] 2. activeDom 상태:`);
-      console.log(`[${seq}]    - activeDom 자체: ${activeDom === null ? 'null' : activeDom === undefined ? 'undefined' : 'object'}`);
-      console.log(`[${seq}]    - activeDom?.file?.path: ${activeDom?.file?.path ?? '없음'}`);
-      console.log(`[${seq}]    - activeDom?.selfEl 존재: ${!!activeDom?.selfEl}`);
-      if (activeDom?.selfEl) {
-        console.log(`[${seq}]    - activeDom.selfEl.className: ${activeDom.selfEl.className}`);
-      }
-
-      // 2-1. tree.activeDom 상태
-      const treeActiveDom = explorerView.tree?.activeDom;
-      console.log(`[${seq}] 2-1. tree.activeDom 상태:`);
-      console.log(`[${seq}]    - tree.activeDom 자체: ${treeActiveDom === null ? 'null' : treeActiveDom === undefined ? 'undefined' : 'object'}`);
-      console.log(`[${seq}]    - tree.activeDom?.file?.path: ${treeActiveDom?.file?.path ?? '없음'}`);
-      console.log(`[${seq}]    - activeDom === tree.activeDom: ${activeDom === treeActiveDom}`);
-
-      // 3. focusedItem 상태
-      const focusedItem = explorerView.tree?.focusedItem;
-      console.log(`[${seq}] 3. tree.focusedItem 상태:`);
-      console.log(`[${seq}]    - focusedItem 자체: ${focusedItem === null ? 'null' : focusedItem === undefined ? 'undefined' : 'object'}`);
-      console.log(`[${seq}]    - focusedItem?.file?.path: ${focusedItem?.file?.path ?? '없음'}`);
-    }
-
-    // 4. DOM 상태: is-active 클래스가 있는 요소들
-    const activeItems = document.querySelectorAll(".nav-file-title.is-active, .tree-item-self.is-active");
-    console.log(`[${seq}] 4. DOM is-active 요소 (${activeItems.length}개):`);
-    if (activeItems.length === 0) {
-      console.log(`[${seq}]    - (없음)`);
-    } else {
-      activeItems.forEach((item, idx) => {
-        const path = item.getAttribute("data-path") || item.closest("[data-path]")?.getAttribute("data-path");
-        console.log(`[${seq}]    - [${idx}] path: ${path}`);
-        console.log(`[${seq}]    - [${idx}] className: ${item.className}`);
-      });
-    }
-
-    // 5. DOM 상태: has-focus 클래스가 있는 요소들
-    const focusedItems = document.querySelectorAll(".nav-file-title.has-focus, .tree-item-self.has-focus");
-    console.log(`[${seq}] 5. DOM has-focus 요소 (${focusedItems.length}개):`);
-    if (focusedItems.length === 0) {
-      console.log(`[${seq}]    - (없음)`);
-    } else {
-      focusedItems.forEach((item, idx) => {
-        const path = item.getAttribute("data-path") || item.closest("[data-path]")?.getAttribute("data-path");
-        console.log(`[${seq}]    - [${idx}] path: ${path}`);
-        console.log(`[${seq}]    - [${idx}] className: ${item.className}`);
-      });
-    }
-
-    // 6. 현재 열린 탭 정보
-    const activeLeaf = this.getActiveLeaf();
-    console.log(`[${seq}] 6. 현재 활성 Leaf:`);
-    console.log(`[${seq}]    - leaf id: ${activeLeaf ? this.getLeafDebugId(activeLeaf) : 'null'}`);
-    console.log(`[${seq}]    - viewType: ${activeLeaf?.view?.getViewType() ?? 'null'}`);
-    console.log(`[${seq}]    - filePath: ${activeLeaf ? this.getFilePath(activeLeaf) : 'null'}`);
-    console.log(`[${seq}]    - isPreview: ${activeLeaf ? this.previewLeaves.has(activeLeaf) : false}`);
-
-    // 7. 모든 열린 탭 목록
-    console.log(`[${seq}] 7. 메인 영역 열린 탭:`);
-    let tabIndex = 0;
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      const location = this.getLeafLocation(leaf);
-      if (location === "main") {
-        const filePath = this.getFilePath(leaf);
-        const viewType = leaf.view?.getViewType();
-        const isPreview = this.previewLeaves.has(leaf);
-        console.log(`[${seq}]    - [${tabIndex}] id=${this.getLeafDebugId(leaf)}, type=${viewType}, path=${filePath}, preview=${isPreview}`);
-        tabIndex++;
-      }
-    });
-    if (tabIndex === 0) {
-      console.log(`[${seq}]    - (열린 탭 없음)`);
-    }
-
-    console.log(`${"=".repeat(70)}\n`);
-  }
-
   // ─────────────────────────────────────────────────────────────────────────
-  // 탭 상태 관리
+  // Tab State Management / 탭 상태 관리
   // ─────────────────────────────────────────────────────────────────────────
 
   private getTabState(leaf: WorkspaceLeaf): TabState {
-    if (leaf.view?.getViewType() === "empty") return "empty";
+    if (leaf.view?.getViewType() === CONFIG.VIEW_TYPES.EMPTY) return "empty";
     if (this.previewLeaves.has(leaf)) return "preview";
     return "permanent";
   }
@@ -627,15 +207,14 @@ private analyzeCSSStyles() {
     this.updateTabStyle(leaf);
   }
 
-  private promoteToPermament(leaf: WorkspaceLeaf) {
+  private promoteToPermanent(leaf: WorkspaceLeaf) {
     if (!this.previewLeaves.has(leaf)) return;
-
     this.setAsPermanent(leaf);
-    log("Promoted to permanent:", this.getLeafDebugId(leaf));
+    log("Promoted to permanent:", this.getLeafId(leaf));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 위치 판단 (사용자 멘탈 모델 기반)
+  // Location / 위치 판단
   // ─────────────────────────────────────────────────────────────────────────
 
   private getLeafLocation(leaf: WorkspaceLeaf): LeafLocation {
@@ -652,23 +231,28 @@ private analyzeCSSStyles() {
     return this.getLeafLocation(leaf) === "sidebar";
   }
 
-
   // ─────────────────────────────────────────────────────────────────────────
-  // 의도 판별
+  // Intent Detection / 의도 판별
   // ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * Determine file open intent: browse (view) or create (new file).
+   * 파일 열기 의도 판별: 탐색(조회) 또는 생성(새 파일).
+   */
   private determineOpenIntent(file: TFile, openState?: any): OpenIntent {
-    // 1. rename: "all" means create (newly created file)
+    // rename="all" → newly created file / rename="all" → 새로 생성된 파일
     if (openState?.eState?.rename === "all") {
       return "create";
     }
 
-    // 2. Canvas/PDF without rename should be browse
-    if (file.extension === "canvas" || file.extension === "pdf") {
+    // Canvas/PDF always browse (creation handled by vault.create patch)
+    // Canvas/PDF는 항상 탐색 (생성은 vault.create 패치에서 처리)
+    if (file.extension === CONFIG.VIEW_TYPES.CANVAS || file.extension === CONFIG.VIEW_TYPES.PDF) {
       return "browse";
     }
 
-    // 3. Daily Notes detection
+    // Daily Notes → always create (even when reopening existing ones)
+    // Daily Notes → 항상 생성 (이미 존재하는 파일을 다시 열 때도)
     if (openState?.state?.mode === "source") {
       if (this.isDailyNote(file)) {
         return "create";
@@ -679,7 +263,7 @@ private analyzeCSSStyles() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Leaf 탐색
+  // Leaf Search / Leaf 탐색
   // ─────────────────────────────────────────────────────────────────────────
 
   private findLeafWithFile(
@@ -729,23 +313,8 @@ private analyzeCSSStyles() {
     return children.filter((child) => child !== leaf);
   }
 
-  private isFileOpenInAnyLeaf(
-    filePath: string,
-    excludeLeaf?: WorkspaceLeaf
-  ): boolean {
-    let found = false;
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      if (found) return;
-      if (excludeLeaf && leaf === excludeLeaf) return;
-      if (this.getFilePath(leaf) === filePath) {
-        found = true;
-      }
-    });
-    return found;
-  }
-
   // ─────────────────────────────────────────────────────────────────────────
-  // openFile 패치
+  // openFile Patch / openFile 패치
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchOpenFile() {
@@ -758,7 +327,7 @@ private analyzeCSSStyles() {
           file: TFile,
           openState?: any
         ) {
-          return plugin.handleOpenFile(this, file, openState, original);
+          return plugin.handleOpenFile(this, file, openState, original as unknown as OpenFileFn);
         };
       },
     });
@@ -767,18 +336,26 @@ private analyzeCSSStyles() {
     log("Patched openFile");
   }
 
+  /**
+   * Core open-file handler. Decides Preview vs Permanent based on intent.
+   * 핵심 파일 열기 핸들러. 의도에 따라 Preview/Permanent를 결정합니다.
+   *
+   * Flow / 흐름:
+   * 1. Apply rename mode for newly created files / 새 파일에 제목편집모드 적용
+   * 2. Skip if same file already open / 같은 파일이면 무시
+   * 3. Focus existing tab if duplicate / 중복 시 기존 탭 포커스
+   * 4. Permanent: create/ctrl-click → new tab / Permanent: 생성/Ctrl클릭 → 새 탭
+   * 5. Preview: reuse existing preview tab / Preview: 기존 Preview 탭 재사용
+   * 6. Fallback: use current tab / 폴백: 현재 탭 사용
+   */
   private async handleOpenFile(
     leaf: WorkspaceLeaf,
     file: TFile,
     openState: any,
-    originalMethod: Function
+    originalMethod: OpenFileFn
   ) {
-    const seq = this.getNextSequence();
-    console.log(`\n[${seq}] ▶▶▶ handleOpenFile 시작: ${file.path}`);
-    console.log(`[${seq}]     leaf.id: ${this.getLeafDebugId(leaf)}`);
-    this.debugFileExplorerState(`handleOpenFile 진입 - ${file.path}`);
-
-    // 새로 생성된 파일인 경우 → 제목편집모드 강제 적용 (Daily Notes 제외)
+    // [1] Newly created files → force title-edit mode (except Daily Notes)
+    // 새로 생성된 파일 → 제목편집모드 강제 적용 (Daily Notes 제외)
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
       if (!this.isDailyNote(file)) {
@@ -793,74 +370,61 @@ private analyzeCSSStyles() {
     const isCtrlClick = this.consumeCtrlClickFlag();
     const shouldBePermanent = intent === "create" || isCtrlClick;
 
-    console.log(`[${seq}]     state=${currentState}, intent=${intent}, permanent=${shouldBePermanent}`);
-
-    // 이미 같은 파일이 열려있으면 무시
+    // [2] Same file already open → skip
     if (this.getFilePath(leaf) === file.path) {
-      console.log(`[${seq}]     → Same file, skipping`);
       return;
     }
 
-    // 다른 탭에 이미 열려있으면 포커스만 이동
+    // [3] Duplicate prevention: focus existing tab in same panel
+    // 중복 방지: 같은 패널 내 기존 탭으로 포커스 이동
     const existingLeaf = this.findLeafWithFile(file.path, leaf);
     if (existingLeaf && !isCtrlClick) {
-      console.log(`[${seq}]     → Already open, focusing existing tab`);
       this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
       return;
     }
 
-    // Permanent로 열어야 하는 경우
+    // [4] Permanent intent → open in new tab (preserving existing tabs)
     if (shouldBePermanent) {
       if (currentState === "permanent" || currentState === "preview") {
-        console.log(`[${seq}]     → Opening in new tab (permanent)`);
-        const result = await this.openInNewTab(leaf, file, openState, true, originalMethod);
-        this.debugFileExplorerState(`handleOpenFile 완료 (new tab permanent) - ${file.path}`);
-        return result;
+        return await this.openInNewTab(file, openState, true, originalMethod);
       }
-      console.log(`[${seq}]     → Opening in current tab (permanent)`);
       this.markAsProcessed(leaf);
       const result = await originalMethod.call(leaf, file, openState);
       this.setAsPermanent(leaf);
-      this.debugFileExplorerState(`handleOpenFile 완료 (current tab permanent) - ${file.path}`);
       return result;
     }
 
-    // Preview로 열어야 하는 경우: 기존 Preview 탭 재사용
+    // [5] Browse intent: reuse existing preview tab if available
+    // 탐색 의도: 기존 Preview 탭이 있으면 재사용
     const existingPreview = this.findPreviewLeaf(leaf);
     if (existingPreview) {
-      console.log(`[${seq}]     → Reusing existing preview tab`);
       this.markAsProcessed(existingPreview);
       const result = await originalMethod.call(existingPreview, file, openState);
       this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
-      this.debugFileExplorerState(`handleOpenFile 완료 (reuse preview) - ${file.path}`);
       return result;
     }
 
-    // Preview가 없는 경우
+    // [5b] No preview, current is Permanent → create new preview tab
     if (currentState === "permanent") {
-      console.log(`[${seq}]     → Opening in new tab (preview)`);
-      const result = await this.openInNewTab(leaf, file, openState, false, originalMethod);
-      this.debugFileExplorerState(`handleOpenFile 완료 (new tab preview) - ${file.path}`);
-      return result;
+      return await this.openInNewTab(file, openState, false, originalMethod);
     }
 
-    // Empty 또는 Preview 탭: 현재 탭에서 Preview로 열기
-    console.log(`[${seq}]     → Opening in current tab (preview)`);
+    // [6] Empty or Preview tab → open as Preview in current tab
     this.markAsProcessed(leaf);
     const result = await originalMethod.call(leaf, file, openState);
     this.setAsPreview(leaf);
-    this.ensureExplorerActiveState(file, seq);
-    this.debugFileExplorerState(`handleOpenFile 완료 (current tab preview) - ${file.path}`);
+    this.ensureExplorerActiveState(file);
     return result;
   }
 
   private async openInNewTab(
-    _fromLeaf: WorkspaceLeaf,
     file: TFile,
     openState: any,
     asPermanent: boolean,
-    originalMethod: Function
+    originalMethod: OpenFileFn
   ) {
+    // Save before originalMethod call (openState.eState may mutate)
+    // originalMethod 호출 전 저장 (openState.eState가 변이될 수 있음)
     const shouldApplyRename = openState?.eState?.rename === "all";
 
     const newLeaf = this.app.workspace.getLeaf("tab");
@@ -890,7 +454,7 @@ private analyzeCSSStyles() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // setViewState 패치 (비파일 뷰 처리)
+  // setViewState Patch (non-file views) / setViewState 패치 (비파일 뷰 처리)
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchSetViewState() {
@@ -899,7 +463,7 @@ private analyzeCSSStyles() {
     const uninstall = around(WorkspaceLeaf.prototype, {
       setViewState(original) {
         return async function (this: WorkspaceLeaf, viewState: any, eState?: any) {
-          return plugin.handleSetViewState(this, viewState, eState, original);
+          return plugin.handleSetViewState(this, viewState, eState, original as unknown as SetViewStateFn);
         };
       },
     });
@@ -908,11 +472,19 @@ private analyzeCSSStyles() {
     log("Patched setViewState");
   }
 
+  /**
+   * Handle non-file views (Graph, Canvas, etc.) with same Preview/Permanent logic.
+   * 비파일 뷰(Graph, Canvas 등)를 동일한 Preview/Permanent 로직으로 처리합니다.
+   *
+   * processedByOpenFile flag: when openFile already handled this leaf,
+   * skip our logic and pass through to original setViewState.
+   * processedByOpenFile 플래그: openFile에서 이미 처리한 경우 원본 setViewState로 통과.
+   */
   private async handleSetViewState(
     leaf: WorkspaceLeaf,
     viewState: any,
     eState: any,
-    originalMethod: Function
+    originalMethod: SetViewStateFn
   ) {
     if (this.wasProcessed(leaf)) {
       this.clearProcessed(leaf);
@@ -921,39 +493,38 @@ private analyzeCSSStyles() {
 
     const viewType = viewState?.type;
 
-    if (viewType === "markdown" || viewType === "empty") {
+    // Markdown and empty views are handled by openFile patch
+    if (viewType === CONFIG.VIEW_TYPES.MARKDOWN || viewType === CONFIG.VIEW_TYPES.EMPTY) {
       return originalMethod.call(leaf, viewState, eState);
     }
 
+    // Sidebar views don't need Preview/Permanent logic
     if (this.isInSidebar(leaf)) {
       return originalMethod.call(leaf, viewState, eState);
     }
 
     const currentState = this.getTabState(leaf);
     const shouldBePermanent = this.consumeRibbonDoubleClickFlag(viewType);
-    const leafId = this.getLeafDebugId(leaf);
-    log(`setViewState: type=${viewType}, state=${currentState}, permanent=${shouldBePermanent}, leafId=${leafId}`);
 
+    // Same view type already open → promote if needed, skip opening
     if (leaf.view?.getViewType() === viewType) {
       if (shouldBePermanent && this.previewLeaves.has(leaf)) {
-        log(`  → Same view type, promoting to permanent`);
-        this.promoteToPermament(leaf);
-      } else {
-        log(`  → Same view type, skipping`);
+        this.promoteToPermanent(leaf);
       }
       return;
     }
 
+    // Duplicate: same view type in sibling tabs → focus existing
     const existingLeaf = this.findLeafWithViewType(viewType, leaf);
     if (existingLeaf) {
-      log(`  → Already open: ${viewType}, focusing existing tab`);
       if (shouldBePermanent && this.previewLeaves.has(existingLeaf)) {
-        this.promoteToPermament(existingLeaf);
+        this.promoteToPermanent(existingLeaf);
       }
       this.app.workspace.setActiveLeaf(existingLeaf, { focus: true });
       return;
     }
 
+    // Permanent intent
     if (shouldBePermanent) {
       if (currentState === "permanent" || currentState === "preview") {
         const newLeaf = this.app.workspace.getLeaf("tab");
@@ -967,64 +538,51 @@ private analyzeCSSStyles() {
       return result;
     }
 
+    // Browse: reuse existing preview
     const existingPreview = this.findPreviewLeaf(leaf);
     if (existingPreview) {
-      const previewId = this.getLeafDebugId(existingPreview);
-      log(`  → Reusing existing preview tab (leafId=${previewId})`);
       const result = await originalMethod.call(existingPreview, viewState, eState);
-      log(`  → After setViewState, isPreview=${this.previewLeaves.has(existingPreview)}`);
       this.app.workspace.setActiveLeaf(existingPreview, { focus: true });
       return result;
     }
 
+    // Browse: Permanent → new preview tab
     if (currentState === "permanent") {
       const newLeaf = this.app.workspace.getLeaf("tab");
-      const newLeafId = this.getLeafDebugId(newLeaf);
-      log(`  → Creating new preview tab (leafId=${newLeafId})`);
       const result = await originalMethod.call(newLeaf, viewState, eState);
       this.setAsPreview(newLeaf);
-      log(`  → After setAsPreview, isPreview=${this.previewLeaves.has(newLeaf)}`);
       this.app.workspace.setActiveLeaf(newLeaf, { focus: true });
       return result;
     }
 
-    log(`  → Using current tab (leafId=${leafId})`);
+    // Browse: use current tab as preview
     const result = await originalMethod.call(leaf, viewState, eState);
     this.setAsPreview(leaf);
-    log(`  → After setAsPreview, isPreview=${this.previewLeaves.has(leaf)}`);
     return result;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // detach 패치 (탭 닫힘 처리)
+  // detach Patch (tab close cleanup) / detach 패치 (탭 닫힘 처리)
   // ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * Two-phase sidebar cleanup on tab close:
+   * 탭 닫힘 시 2단계 사이드바 정리:
+   *
+   * Phase 1 (before detach): Reset internal state via onFileOpen(null)
+   *   detach 전: onFileOpen(null)로 내부 상태 리셋
+   * Phase 2 (after detach, async): Clean stale DOM classes
+   *   detach 후(비동기): 잔류 DOM 클래스 정리
+   */
   private patchDetach() {
     const plugin = this;
 
     const uninstall = around(WorkspaceLeaf.prototype, {
       detach(original) {
         return function (this: WorkspaceLeaf) {
-          const filePath = plugin.getFilePath(this);
-          const leafId = plugin.getLeafDebugId(this);
-
-          const seq = plugin.getNextSequence();
-          console.log(`\n[${seq}] ▶▶▶ detach 시작`);
-          console.log(`[${seq}]     닫히는 탭 leaf.id: ${leafId}`);
-          console.log(`[${seq}]     닫히는 탭 filePath: ${filePath}`);
-
-          // Phase 1: detach 전 내부 상태 리셋
-          // → re-click 시 is-active 정상 적용을 위해 필수
-          plugin.clearSidebarInternalState(seq);
-
+          plugin.clearSidebarInternalState();
           const result = original.call(this);
-
-          // Phase 2: detach 후 잔류 DOM 클래스 정리
-          // → Obsidian 이벤트가 복원한 시각적 잔류물 제거
-          setTimeout(() => {
-            plugin.cleanStaleSidebarDOM(seq);
-          }, 0);
-
+          setTimeout(() => plugin.cleanStaleSidebarDOM(), 0);
           return result;
         };
       },
@@ -1035,7 +593,7 @@ private analyzeCSSStyles() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // setPinned 패치 (탭 고정 시 승격)
+  // setPinned Patch (pin → promote) / setPinned 패치 (탭 고정 시 승격)
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchSetPinned() {
@@ -1045,10 +603,8 @@ private analyzeCSSStyles() {
       setPinned(original) {
         return function (this: WorkspaceLeaf, pinned: boolean) {
           if (pinned && plugin.previewLeaves.has(this)) {
-            log("Tab pinned → promote");
-            plugin.promoteToPermament(this);
+            plugin.promoteToPermanent(this);
           }
-
           return original.call(this, pinned);
         };
       },
@@ -1059,7 +615,7 @@ private analyzeCSSStyles() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // vault.create 패치 (새 파일 생성 감지)
+  // vault.create Patch (new file detection) / vault.create 패치 (새 파일 생성 감지)
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchVaultCreate() {
@@ -1080,26 +636,30 @@ private analyzeCSSStyles() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 이벤트 핸들러
+  // Event Handlers / 이벤트 핸들러
   // ─────────────────────────────────────────────────────────────────────────
 
   private registerFileOpenHandler() {
+    // Track most recently opened file leaf for double-click promotion
+    // 더블클릭 승격을 위해 가장 최근에 열린 파일 leaf를 추적
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        const seq = this.getNextSequence();
-        console.log(`\n[${seq}] ◆◆◆ file-open 이벤트: ${file?.path ?? 'null'}`);
-        this.debugFileExplorerState(`file-open 이벤트 - ${file?.path ?? 'null'}`);
-
         if (!file) return;
 
         const activeLeaf = this.getActiveLeaf();
         const viewType = activeLeaf?.view?.getViewType();
-        if (viewType === "markdown" || viewType === "canvas" || viewType === "pdf") {
+        if (
+          viewType === CONFIG.VIEW_TYPES.MARKDOWN ||
+          viewType === CONFIG.VIEW_TYPES.CANVAS ||
+          viewType === CONFIG.VIEW_TYPES.PDF
+        ) {
           this.lastActiveLeaf = activeLeaf;
         }
       })
     );
 
+    // Handle ribbon double-click: promote preview after active-leaf-change
+    // 리본 더블클릭 처리: active-leaf-change 후 Preview 승격
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (!this.ribbonDoubleClickExpectedViewType || !leaf) {
@@ -1110,8 +670,7 @@ private analyzeCSSStyles() {
         const expectedType = this.ribbonDoubleClickExpectedViewType;
 
         if (viewType === expectedType && this.previewLeaves.has(leaf)) {
-          log(`Active leaf change → promoting expected ${viewType} view`);
-          this.promoteToPermament(leaf);
+          this.promoteToPermanent(leaf);
         }
 
         this.ribbonDoubleClickExpectedViewType = null;
@@ -1120,48 +679,26 @@ private analyzeCSSStyles() {
   }
 
   private registerClickHandlers() {
-    // Ctrl+Click 감지 (mousedown 캡처 페이즈 — Obsidian이 mousedown에서 openFile 호출하므로 click보다 먼저 설정)
+    // Ctrl+Click: set flag on mousedown capture phase
+    // Obsidian opens files on mousedown, so we must set the flag before that
+    // Ctrl+Click: mousedown 캡처 페이즈에서 플래그 설정
+    // Obsidian은 mousedown에서 파일을 열므로 그 전에 플래그를 설정해야 함
     this.registerDomEvent(document, "mousedown", (evt: MouseEvent) => {
       if ((evt.ctrlKey || evt.metaKey) && this.isFileElement(evt.target)) {
         this.isCtrlClickPending = true;
       }
     }, true);
 
-    // 싱글 클릭 감지 (디버그 로그용)
-    this.registerDomEvent(document, "click", (evt: MouseEvent) => {
-      const target = evt.target as HTMLElement;
-      const fileEl = target.closest("[data-path]") as HTMLElement | null;
-
-      if (fileEl) {
-        const path = fileEl.getAttribute("data-path");
-        const seq = this.getNextSequence();
-        console.log(`\n[${seq}] ● 파일 요소 싱글클릭: ${path}`);
-        console.log(`[${seq}]   Ctrl/Meta: ${evt.ctrlKey || evt.metaKey}`);
-        this.debugFileExplorerState(`싱글클릭 - ${path}`);
-      }
-    }, true);
-
-    // 더블클릭 처리
+    // Double-click handler / 더블클릭 핸들러
     this.registerDomEvent(document, "dblclick", (evt: MouseEvent) => {
-      const target = evt.target as HTMLElement;
-      const fileEl = target.closest("[data-path]") as HTMLElement | null;
-
-      if (fileEl) {
-        const path = fileEl.getAttribute("data-path");
-        const seq = this.getNextSequence();
-        console.log(`\n[${seq}] ●● 파일 요소 더블클릭: ${path}`);
-        this.debugFileExplorerState(`더블클릭 - ${path}`);
-      }
-
       this.handleDoubleClick(evt);
     }, true);
 
-    // 그래프 뷰 드래그 감지
+    // Graph view drag detection (for promotion on drag)
+    // 그래프 뷰 드래그 감지 (드래그 시 승격)
     this.registerDomEvent(document, "mousedown", (evt: MouseEvent) => {
       const activeLeaf = this.getActiveLeaf();
-      const viewType = activeLeaf?.view?.getViewType();
-
-      if (viewType === "graph") {
+      if (activeLeaf?.view?.getViewType() === CONFIG.VIEW_TYPES.GRAPH) {
         this.graphDragStartPos = { x: evt.clientX, y: evt.clientY };
       }
     }, true);
@@ -1170,18 +707,13 @@ private analyzeCSSStyles() {
       if (!this.graphDragStartPos) return;
 
       const activeLeaf = this.getActiveLeaf();
-      const viewType = activeLeaf?.view?.getViewType();
-
-      if (viewType === "graph") {
+      if (activeLeaf?.view?.getViewType() === CONFIG.VIEW_TYPES.GRAPH) {
         const dx = evt.clientX - this.graphDragStartPos.x;
         const dy = evt.clientY - this.graphDragStartPos.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        if (distance > 10) {
-          if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
-            log("Graph drag detected → promote");
-            this.promoteToPermament(activeLeaf);
-          }
+        if (distance > CONFIG.GRAPH_DRAG_THRESHOLD && activeLeaf && this.previewLeaves.has(activeLeaf)) {
+          this.promoteToPermanent(activeLeaf);
         }
       }
 
@@ -1189,113 +721,135 @@ private analyzeCSSStyles() {
     }, true);
   }
 
+  /**
+   * Handle double-click across different UI regions.
+   * 다양한 UI 영역의 더블클릭을 처리합니다.
+   *
+   * Tab header: promotes activeLeaf directly / 탭 헤더: activeLeaf를 직접 승격
+   * Sidebar/Graph: promotes lastActiveLeaf (set by file-open event)
+   * 사이드바/그래프: lastActiveLeaf를 승격 (file-open 이벤트에서 설정됨)
+   */
   private handleDoubleClick(evt: MouseEvent) {
     const target = evt.target as HTMLElement;
 
-    if (target.closest(".workspace-tab-header")) {
+    // Tab header double-click / 탭 헤더 더블클릭
+    if (target.closest(CONFIG.CSS_SELECTORS.TAB_HEADER)) {
       const activeLeaf = this.getActiveLeaf();
       if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
-        log("Tab header double-click → promote");
-        this.promoteToPermament(activeLeaf);
+        this.promoteToPermanent(activeLeaf);
       }
       return;
     }
 
-    const sidebarContent = target.closest(".workspace-leaf-content");
+    // Sidebar double-click / 사이드바 더블클릭
+    const sidebarContent = target.closest(CONFIG.CSS_SELECTORS.LEAF_CONTENT);
     if (sidebarContent) {
       const leaf = this.findLeafByContentEl(sidebarContent as HTMLElement);
       if (leaf && this.isInSidebar(leaf)) {
         if (this.lastActiveLeaf && this.previewLeaves.has(this.lastActiveLeaf)) {
-          log("Sidebar double-click → promote");
-          this.promoteToPermament(this.lastActiveLeaf);
+          this.promoteToPermanent(this.lastActiveLeaf);
         }
         return;
       }
     }
 
-    if (target.closest(".graph-view-container")) {
+    // Graph view double-click / 그래프 뷰 더블클릭
+    if (target.closest(CONFIG.CSS_SELECTORS.GRAPH_CONTAINER)) {
       if (this.lastActiveLeaf && this.previewLeaves.has(this.lastActiveLeaf)) {
-        log("Graph double-click → promote");
-        this.promoteToPermament(this.lastActiveLeaf);
+        this.promoteToPermanent(this.lastActiveLeaf);
       }
       return;
     }
 
-    const ribbonButton = target.closest(".side-dock-ribbon-action");
+    // Ribbon button double-click / 리본 버튼 더블클릭
+    const ribbonButton = target.closest(CONFIG.CSS_SELECTORS.RIBBON_ACTION);
     if (ribbonButton) {
-      const ariaLabel = ribbonButton.getAttribute("aria-label") ?? "";
-      const activeLeaf = this.getActiveLeaf();
-
-      log("Ribbon button double-click");
-      log(`  aria-label: "${ariaLabel}"`);
-
-      if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
-        log(`  → Promoting active preview tab`);
-        this.promoteToPermament(activeLeaf);
-        return;
-      }
-
-      const ariaLower = ariaLabel.toLowerCase();
-      let viewType: string | null = null;
-
-      if (ariaLower.includes("graph") || ariaLabel.includes("그래프")) {
-        viewType = "graph";
-      } else if (ariaLower.includes("canvas") || ariaLabel.includes("캔버스")) {
-        viewType = "canvas";
-      }
-
-      if (viewType) {
-        const currentActiveLeaf = this.getActiveLeaf();
-        if (currentActiveLeaf?.view?.getViewType() === viewType && this.previewLeaves.has(currentActiveLeaf)) {
-          log(`  → Promoting existing ${viewType} view`);
-          this.promoteToPermament(currentActiveLeaf);
-          return;
-        }
-      }
-
-      if (viewType) {
-        this.ribbonDoubleClickExpectedViewType = viewType;
-        log(`  → Expecting ${viewType} view on next active-leaf-change`);
-      }
+      this.handleRibbonDoubleClick(ribbonButton as HTMLElement);
     }
   }
 
+  /**
+   * Ribbon double-click: promote current preview or set flag for pending view.
+   * 리본 더블클릭: 현재 Preview를 승격하거나, 아직 열리지 않은 뷰를 위해 플래그 설정.
+   */
+  private handleRibbonDoubleClick(ribbonButton: HTMLElement) {
+    const ariaLabel = ribbonButton.getAttribute("aria-label") ?? "";
+    const activeLeaf = this.getActiveLeaf();
+
+    // If current active leaf is preview, promote it immediately
+    if (activeLeaf && this.previewLeaves.has(activeLeaf)) {
+      this.promoteToPermanent(activeLeaf);
+      return;
+    }
+
+    // Detect view type from aria-label (supports both EN and KR labels)
+    // aria-label에서 뷰 타입 감지 (영문/한글 라벨 모두 지원)
+    const ariaLower = ariaLabel.toLowerCase();
+    let viewType: string | null = null;
+
+    if (ariaLower.includes("graph") || ariaLabel.includes("그래프")) {
+      viewType = CONFIG.VIEW_TYPES.GRAPH;
+    } else if (ariaLower.includes("canvas") || ariaLabel.includes("캔버스")) {
+      viewType = CONFIG.VIEW_TYPES.CANVAS;
+    }
+
+    if (viewType) {
+      const currentActiveLeaf = this.getActiveLeaf();
+      if (currentActiveLeaf?.view?.getViewType() === viewType && this.previewLeaves.has(currentActiveLeaf)) {
+        this.promoteToPermanent(currentActiveLeaf);
+        return;
+      }
+    }
+
+    // View not yet open → set flag for active-leaf-change handler
+    // 뷰가 아직 열리지 않음 → active-leaf-change 핸들러를 위해 플래그 설정
+    if (viewType) {
+      this.ribbonDoubleClickExpectedViewType = viewType;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Promotion Triggers / 승격 트리거
+  // ─────────────────────────────────────────────────────────────────────────
+
   private registerPromotionTriggers() {
+    // Editor content change → promote / 본문 편집 → 승격
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, info) => {
         const leaf = (info as any).leaf as WorkspaceLeaf | undefined;
         if (leaf && this.previewLeaves.has(leaf)) {
-          log("Editor change → promote");
-          this.promoteToPermament(leaf);
+          this.promoteToPermanent(leaf);
         }
       })
     );
 
+    // File rename → promote / 파일 이름 변경 → 승격
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         this.app.workspace.iterateAllLeaves((leaf) => {
           if (this.getFilePath(leaf) === file.path && this.previewLeaves.has(leaf)) {
-            log("File renamed → promote");
-            this.promoteToPermament(leaf);
+            this.promoteToPermanent(leaf);
           }
         });
       })
     );
 
+    // Canvas content modify → promote / Canvas 수정 → 승격
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile)) return;
-        if (file.extension !== "canvas") return;
+        if (file.extension !== CONFIG.VIEW_TYPES.CANVAS) return;
 
         this.app.workspace.iterateAllLeaves((leaf) => {
           if (this.getFilePath(leaf) === file.path && this.previewLeaves.has(leaf)) {
-            log("Canvas modified → promote");
-            this.promoteToPermament(leaf);
+            this.promoteToPermanent(leaf);
           }
         });
       })
     );
 
+    // Inline title edit → promote + debounced rename
+    // 인라인 제목 편집 → 승격 + 디바운스된 이름 변경
     this.registerDomEvent(document, "input", (evt: Event) => {
       this.handleInlineTitleEdit(evt);
     }, true);
@@ -1303,14 +857,13 @@ private analyzeCSSStyles() {
 
   private handleInlineTitleEdit(evt: Event) {
     const target = evt.target as HTMLElement;
-    if (!target.classList.contains("inline-title")) return;
+    if (!target.classList.contains(CONFIG.CSS_SELECTORS.INLINE_TITLE.slice(1))) return;
 
     const activeLeaf = this.getActiveLeaf();
     if (!activeLeaf) return;
 
     if (this.previewLeaves.has(activeLeaf)) {
-      log("Inline title edit → promote");
-      this.promoteToPermament(activeLeaf);
+      this.promoteToPermanent(activeLeaf);
     }
 
     this.scheduleFileRename(activeLeaf, target.textContent?.trim() ?? "");
@@ -1349,7 +902,7 @@ private analyzeCSSStyles() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 스타일 관리
+  // Tab Style / 탭 스타일
   // ─────────────────────────────────────────────────────────────────────────
 
   private updateTabStyle(leaf: WorkspaceLeaf) {
@@ -1370,85 +923,92 @@ private analyzeCSSStyles() {
     });
   }
 
-  /**
-   * Phase 1: detach 전 사이드바 내부 상태 리셋
-   * onFileOpen(null)로 내부 상태를 정리해야 re-click 시 is-active가 정상 적용됨
-   */
-  private clearSidebarInternalState(seq: number) {
-    console.log(`\n[${seq}] ◇ Phase1: clearSidebarInternalState`);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Sidebar State Management / 사이드바 상태 관리
+  // ─────────────────────────────────────────────────────────────────────────
 
-    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
-    const explorerView = explorerLeaves[0]?.view as any;
+  /**
+   * Get file explorer view instance (shared helper for sidebar methods).
+   * 파일 탐색기 뷰 인스턴스 획득 (사이드바 메서드 공용 헬퍼).
+   */
+  private getExplorerView(): ExplorerView | null {
+    const view = this.app.workspace.getLeavesOfType(CONFIG.VIEW_TYPES.FILE_EXPLORER)[0]?.view;
+    return (view as unknown as ExplorerView) ?? null;
+  }
+
+  /**
+   * Phase 1: Reset sidebar internal state before detach.
+   * 1단계: detach 전 사이드바 내부 상태 리셋.
+   *
+   * Without this, re-clicking the same file after closing its tab does nothing
+   * because the explorer thinks the file is still active.
+   * 이 처리 없이 탭을 닫고 같은 파일을 다시 클릭하면 탐색기가 여전히 활성으로 인식하여 반응 없음.
+   */
+  private clearSidebarInternalState() {
+    const explorerView = this.getExplorerView();
     if (!explorerView) return;
 
-    console.log(`[${seq}]   [BEFORE] activeDom: ${explorerView.activeDom?.file?.path ?? 'null'}, tree.activeDom: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}, focusedItem: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
-
-    // 1. onFileOpen(null): explorerView.activeDom 초기화 + is-active 제거
+    // onFileOpen(null): reset explorerView.activeDom + remove is-active class
     if (explorerView.onFileOpen) {
       explorerView.onFileOpen(null);
     }
-    // 2. tree.activeDom 직접 초기화 (onFileOpen(null)이 이것을 지우지 않음)
+    // Direct tree.activeDom reset (onFileOpen(null) skips this when activeDom is already null)
+    // tree.activeDom 직접 초기화 (activeDom이 이미 null이면 onFileOpen(null)이 건너뛰므로)
     if (explorerView.tree && explorerView.tree.activeDom !== null) {
       explorerView.tree.activeDom = null;
     }
-    // 3. has-focus 제거
+    // Remove has-focus / has-focus 제거
     if (explorerView.tree?.setFocusedItem) {
       explorerView.tree.setFocusedItem(null);
     }
-
-    console.log(`[${seq}]   [AFTER] activeDom: ${explorerView.activeDom?.file?.path ?? 'null'}, tree.activeDom: ${explorerView.tree?.activeDom?.file?.path ?? 'null'}, focusedItem: ${explorerView.tree?.focusedItem?.file?.path ?? 'null'}`);
   }
 
   /**
-   * Phase 2: detach 후 잔류 DOM 클래스 정리 (setTimeout 내에서 호출)
-   * Obsidian 이벤트가 복원한 is-active/has-focus를 내부 상태와 비교하여 불일치 시 제거
+   * Phase 2: Clean stale DOM classes after detach (called via setTimeout).
+   * 2단계: detach 후 잔류 DOM 클래스 정리 (setTimeout으로 호출).
+   *
+   * Obsidian events may restore is-active/has-focus after our Phase 1 cleanup.
+   * We compare against internal state and remove any mismatched DOM classes.
+   * Obsidian 이벤트가 Phase 1 정리 후 is-active/has-focus를 복원할 수 있음.
+   * 내부 상태와 비교하여 불일치하는 DOM 클래스를 제거.
    */
-  private cleanStaleSidebarDOM(seq: number) {
-    console.log(`\n[${seq}] ◇ Phase2: cleanStaleSidebarDOM`);
-
-    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
-    const explorerView = explorerLeaves[0]?.view as any;
+  private cleanStaleSidebarDOM() {
+    const explorerView = this.getExplorerView();
     if (!explorerView) return;
 
-    // 내부 상태가 null인데 DOM에 is-active가 남아있으면 → 잔류물이므로 제거
     if (!explorerView.activeDom && !explorerView.tree?.activeDom) {
-      const staleActive = explorerView.containerEl?.querySelectorAll('.tree-item-self.is-active');
-      if (staleActive?.length > 0) {
-        console.log(`[${seq}]   잔류 is-active ${staleActive.length}개 제거`);
-        staleActive.forEach((el: HTMLElement) => el.classList.remove('is-active'));
-      }
+      const staleActive = explorerView.containerEl?.querySelectorAll(CONFIG.CSS_SELECTORS.STALE_ACTIVE);
+      staleActive?.forEach((el: Element) => (el as HTMLElement).classList.remove("is-active"));
     }
 
     if (!explorerView.tree?.focusedItem) {
-      const staleFocus = explorerView.containerEl?.querySelectorAll('.tree-item-self.has-focus');
-      if (staleFocus?.length > 0) {
-        console.log(`[${seq}]   잔류 has-focus ${staleFocus.length}개 제거`);
-        staleFocus.forEach((el: HTMLElement) => el.classList.remove('has-focus'));
-      }
+      const staleFocus = explorerView.containerEl?.querySelectorAll(CONFIG.CSS_SELECTORS.STALE_FOCUS);
+      staleFocus?.forEach((el: Element) => (el as HTMLElement).classList.remove("has-focus"));
     }
-
-    console.log(`[${seq}]   완료 (activeDom: ${explorerView.activeDom?.file?.path ?? 'null'})`);
   }
 
   /**
-   * 파일을 연 뒤 탐색기의 is-active가 올바르게 적용되었는지 확인하고, 안 되었으면 보정
-   * file-open 이벤트가 발생하지 않는 경우(detach 후 재열기 등)에 대한 안전망
+   * Safety net: ensure explorer active state after opening a file.
+   * 안전망: 파일을 연 뒤 탐색기의 활성 상태가 올바른지 확인.
+   *
+   * When file-open event doesn't fire (e.g., after detach+reopen),
+   * the explorer's activeDom gets out of sync. This forces a re-sync.
+   * file-open 이벤트가 발생하지 않는 경우(detach 후 재열기 등)
+   * 탐색기의 activeDom이 동기화되지 않으므로 강제 재동기화.
    */
-  private ensureExplorerActiveState(file: TFile, seq: number) {
-    const explorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
-    const explorerView = explorerLeaves[0]?.view as any;
+  private ensureExplorerActiveState(file: TFile) {
+    const explorerView = this.getExplorerView();
     if (!explorerView?.onFileOpen) return;
 
     if (explorerView.activeDom?.file?.path === file.path) {
-      return; // 이미 올바르게 설정됨
+      return;
     }
 
-    console.log(`[${seq}]   ⚠ 탐색기 activeDom 불일치 → onFileOpen(${file.path}) 강제 호출`);
     explorerView.onFileOpen(file);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 유틸리티
+  // Utilities / 유틸리티
   // ─────────────────────────────────────────────────────────────────────────
 
   private getFilePath(leaf: WorkspaceLeaf): string | null {
@@ -1459,7 +1019,7 @@ private analyzeCSSStyles() {
     return null;
   }
 
-  private getLeafDebugId(leaf: WorkspaceLeaf): string {
+  private getLeafId(leaf: WorkspaceLeaf): string {
     return (leaf as unknown as InternalLeaf).id ?? "unknown";
   }
 
@@ -1472,6 +1032,10 @@ private analyzeCSSStyles() {
     return !!target.closest("[data-path]") || !!target.closest(".tree-item-self");
   }
 
+  /**
+   * Detect Daily Notes by checking the internal plugin settings and strict date parsing.
+   * Daily Notes 내부 플러그인 설정과 엄격한 날짜 파싱으로 Daily Note 여부를 감지합니다.
+   */
   private isDailyNote(file: TFile): boolean {
     if (file.extension !== "md") return false;
 
@@ -1482,10 +1046,8 @@ private analyzeCSSStyles() {
     const format = options?.format || "YYYY-MM-DD";
     const folder = options?.folder || "";
 
-    // 폴더 설정이 있으면 경로 확인
     if (folder && file.parent?.path !== folder) return false;
 
-    // moment strict 파싱으로 파일명이 날짜 포맷과 일치하는지 확인
     return (window as any).moment(file.basename, format, true).isValid();
   }
 
@@ -1521,58 +1083,17 @@ private analyzeCSSStyles() {
     return false;
   }
 
+  /**
+   * Consume-once flag pattern: returns true if viewType matches the expected ribbon
+   * double-click type, then clears the flag. Used by setViewState to detect intent.
+   * 1회 소비 플래그 패턴: viewType이 리본 더블클릭 기대 타입과 일치하면 true 반환 후
+   * 플래그 초기화. setViewState에서 의도 감지에 사용.
+   */
   private consumeRibbonDoubleClickFlag(viewType: string): boolean {
     if (this.ribbonDoubleClickExpectedViewType === viewType) {
       this.ribbonDoubleClickExpectedViewType = null;
       return true;
     }
     return false;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // 설정 관리
-  // ─────────────────────────────────────────────────────────────────────────
-
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-  }
-
-  async saveSettings() {
-    await this.saveData(this.settings);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 설정 탭
-// ═══════════════════════════════════════════════════════════════════════════
-
-class IDEStylePreviewSettingTab extends PluginSettingTab {
-  plugin: IDEStylePreviewPlugin;
-
-  constructor(app: App, plugin: IDEStylePreviewPlugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-
-  display(): void {
-    const { containerEl } = this;
-
-    containerEl.empty();
-    containerEl.createEl("h2", { text: "IDE Style Preview Settings" });
-
-    new Setting(containerEl)
-      .setName("Debug mode")
-      .setDesc("Enable comprehensive debug logging (requires restart)")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.debugMode)
-          .onChange(async (value) => {
-            this.plugin.settings.debugMode = value;
-            await this.plugin.saveSettings();
-            new Notice(
-              "Debug mode changed. Please restart Obsidian for changes to take effect."
-            );
-          })
-      );
   }
 }

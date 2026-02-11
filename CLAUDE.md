@@ -6,21 +6,26 @@
 - 컨텍스트가 길어지면 선제적으로 MCP memory에 진행 상황·실패 원인·다음 단계를 저장
 - 사용자가 저장 요청하지 않더라도 복잡한 디버깅 중이면 중간중간 문서 및 메모리 알아서 저장할 것
 
+## 메모리 설정 (크로스PC 작업용)
+- **MCP memory** (`claude-memory.jsonl`, 프로젝트 루트): git으로 동기화됨 → 크로스PC 작업에 사용
+- Auto Memory (`.claude/projects/.../memory/`): 로컬 전용, git 동기화 안 됨
+- **중요 정보는 반드시 MCP memory에 저장할 것** (Auto Memory만 사용하면 다른 PC에서 유실됨)
+
 ## 문서 구조
 프로젝트 이해를 위해 다음 문서들을 참고하세요:
 
-- **`docs/SPEC.md`**: 기능 명세서
+- **`docs/SPEC_KOR.md`** / **`docs/SPEC_ENG.md`**: 기능 명세서 (한글/영문)
   - 각 기능의 동작을 객관적으로 기술 ("입력 → 출력" 형식)
   - 패턴별 규칙 (Browse/Open/Create/Promote)
   - 기능별 상세 동작
 
 - **`docs/TEST_CHECKLIST.txt`**: 최종 테스트 체크리스트
   - 4단계 테스트 진행 순서 (기능 테스트 → 버그 수정 → 리팩토링 → 문서화)
-  - 기능별 체크리스트 (87개 항목)
+  - 기능별 체크리스트 (93개 항목)
   - 알려진 버그 목록 및 해결 방안
   - 텍스트 파일로 편집 편의성 확보
 
-- **`docs/NOTES.md`**: Obsidian API 레퍼런스
+- **`docs/NOTES_KOR.md`** / **`docs/NOTES_ENG.md`**: Obsidian API 레퍼런스 (한글/영문)
   - Obsidian 내부 API (WorkspaceLeaf, tree, explorerView 등)
   - 핵심 발견 사항 (explorerView.activeDom vs tree.activeDom)
   - 개발 기술 노트에 충실, API 레퍼런스와 발견만

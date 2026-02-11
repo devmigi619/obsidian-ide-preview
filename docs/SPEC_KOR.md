@@ -37,7 +37,7 @@
 ### Modifier Key 동작
 
 Obsidian의 기본 동작을 따릅니다:
-- **Ctrl/Cmd + Click**: 새 탭에서 열기
+- **Ctrl/Cmd + Click**: 새 **Permanent** 탭에서 열기 (기존 탭 무시)
 
 ### 포커스 관리
 
@@ -90,6 +90,7 @@ Obsidian의 기본 동작을 따릅니다:
 | **파일 이름 변경** | Preview 탭 파일의 이름 변경 시 (vault.rename 이벤트) |
 | **Canvas 편집** | 노드 추가/수정/삭제/이동, 연결선 변경 등 (vault.modify 이벤트) |
 | **더블 클릭** | 탭 헤더 또는 사이드바에서 더블 클릭 |
+| **탭 고정 (Pin)** | Preview 탭을 고정하면 Permanent로 전환 |
 
 ---
 

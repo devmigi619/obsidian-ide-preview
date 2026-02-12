@@ -261,7 +261,7 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       openFile(original) {
         return async function(file, openState) {
-          return boundHandler(this, file, openState, original);
+          return await boundHandler(this, file, openState, original);
         };
       }
     });
@@ -358,7 +358,7 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       setViewState(original) {
         return async function(viewState, eState) {
-          return boundHandler(this, viewState, eState, original);
+          return await boundHandler(this, viewState, eState, original);
         };
       }
     });

@@ -359,7 +359,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
           file: TFile,
           openState?: OpenViewState
         ) {
-          return boundHandler(this, file, openState, original as unknown as OpenFileFn);
+          return await boundHandler(this, file, openState, original as unknown as OpenFileFn);
         };
       },
     });
@@ -495,7 +495,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
     const uninstall = around(WorkspaceLeaf.prototype, {
       setViewState(original) {
         return async function (this: WorkspaceLeaf, viewState: ViewState, eState?: Record<string, unknown>) {
-          return boundHandler(this, viewState, eState, original as unknown as SetViewStateFn);
+          return await boundHandler(this, viewState, eState, original as unknown as SetViewStateFn);
         };
       },
     });

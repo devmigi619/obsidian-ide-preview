@@ -94,7 +94,7 @@ var CONFIG = {
   LOG_PREFIX: "[IDE Preview]"
 };
 function log(message, ...args) {
-  console.log(`${CONFIG.LOG_PREFIX} ${message}`, ...args);
+  console.debug(`${CONFIG.LOG_PREFIX} ${message}`, ...args);
 }
 var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   constructor() {
@@ -127,7 +127,7 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle / 라이프사이클
   // ─────────────────────────────────────────────────────────────────────────
-  async onload() {
+  onload() {
     log("Plugin loaded");
     this.installPatches();
     this.registerEventHandlers();
@@ -257,11 +257,11 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   // openFile Patch / openFile 패치
   // ─────────────────────────────────────────────────────────────────────────
   patchOpenFile() {
-    const plugin = this;
+    const boundHandler = this.handleOpenFile.bind(this);
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       openFile(original) {
         return async function(file, openState) {
-          return plugin.handleOpenFile(this, file, openState, original);
+          return boundHandler(this, file, openState, original);
         };
       }
     });
@@ -281,11 +281,12 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
    * 6. Fallback: use current tab / 폴백: 현재 탭 사용
    */
   async handleOpenFile(leaf, file, openState, originalMethod) {
+    var _a;
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
       if (!this.isDailyNote(file)) {
-        openState = openState || {};
-        openState.eState = openState.eState || {};
+        openState = openState != null ? openState : {};
+        openState.eState = (_a = openState.eState) != null ? _a : {};
         openState.eState.rename = "all";
       }
     }
@@ -353,11 +354,11 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   // setViewState Patch (non-file views) / setViewState 패치 (비파일 뷰 처리)
   // ─────────────────────────────────────────────────────────────────────────
   patchSetViewState() {
-    const plugin = this;
+    const boundHandler = this.handleSetViewState.bind(this);
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       setViewState(original) {
         return async function(viewState, eState) {
-          return plugin.handleSetViewState(this, viewState, eState, original);
+          return boundHandler(this, viewState, eState, original);
         };
       }
     });
@@ -443,13 +444,14 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
    *   detach 후(비동기): 잔류 DOM 클래스 정리
    */
   patchDetach() {
-    const plugin = this;
+    const clearState = this.clearSidebarInternalState.bind(this);
+    const cleanDOM = this.cleanStaleSidebarDOM.bind(this);
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       detach(original) {
         return function() {
-          plugin.clearSidebarInternalState();
+          clearState();
           const result = original.call(this);
-          setTimeout(() => plugin.cleanStaleSidebarDOM(), 0);
+          setTimeout(() => cleanDOM(), 0);
           return result;
         };
       }
@@ -461,12 +463,13 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   // setPinned Patch (pin → promote) / setPinned 패치 (탭 고정 시 승격)
   // ─────────────────────────────────────────────────────────────────────────
   patchSetPinned() {
-    const plugin = this;
+    const { previewLeaves } = this;
+    const promote = this.promoteToPermanent.bind(this);
     const uninstall = around(import_obsidian.WorkspaceLeaf.prototype, {
       setPinned(original) {
         return function(pinned) {
-          if (pinned && plugin.previewLeaves.has(this)) {
-            plugin.promoteToPermanent(this);
+          if (pinned && previewLeaves.has(this)) {
+            promote(this);
           }
           return original.call(this, pinned);
         };
@@ -479,11 +482,11 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
   // vault.create Patch (new file detection) / vault.create 패치 (새 파일 생성 감지)
   // ─────────────────────────────────────────────────────────────────────────
   patchVaultCreate() {
-    const plugin = this;
+    const { newlyCreatedFiles } = this;
     const vault = this.app.vault;
     const originalCreate = vault.create.bind(vault);
-    vault.create = async function(path, data, options) {
-      plugin.newlyCreatedFiles.add(path);
+    vault.create = function(path, data, options) {
+      newlyCreatedFiles.add(path);
       return originalCreate(path, data, options);
     };
     this.cleanupFunctions.push(() => {
@@ -680,8 +683,8 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     if (this.titleRenameTimer) {
       window.clearTimeout(this.titleRenameTimer);
     }
-    this.titleRenameTimer = window.setTimeout(async () => {
-      await this.renameFile(currentPath, newTitle);
+    this.titleRenameTimer = window.setTimeout(() => {
+      void this.renameFile(currentPath, newTitle);
     }, CONFIG.TITLE_RENAME_DEBOUNCE_MS);
   }
   async renameFile(currentPath, newTitle) {
@@ -836,7 +839,7 @@ var IDEStylePreviewPlugin = class extends import_obsidian.Plugin {
     const folder = (options == null ? void 0 : options.folder) || "";
     if (folder && ((_d = file.parent) == null ? void 0 : _d.path) !== folder)
       return false;
-    return window.moment(file.basename, format, true).isValid();
+    return moment(file.basename, format, true).isValid();
   }
   findLeafByContentEl(contentEl) {
     let found = null;

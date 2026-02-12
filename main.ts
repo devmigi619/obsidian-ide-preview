@@ -5,8 +5,14 @@ import {
   FileView,
   Notice,
   WorkspaceSplit,
+  DataWriteOptions,
+  OpenViewState,
+  ViewState,
 } from "obsidian";
 import { around } from "monkey-around";
+
+/** Moment.js function (globally available in Obsidian runtime) */
+declare function moment(input: string, format: string, strict: boolean): { isValid(): boolean };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Type Definitions / 타입 정의
@@ -22,10 +28,10 @@ type LeafLocation = "sidebar" | "main";
 type OpenIntent = "browse" | "create";
 
 /** Original openFile method signature / openFile 원본 메서드 시그니처 */
-type OpenFileFn = (file: TFile, openState?: any) => Promise<void>;
+type OpenFileFn = (file: TFile, openState?: OpenViewState) => Promise<void>;
 
 /** Original setViewState method signature / setViewState 원본 메서드 시그니처 */
-type SetViewStateFn = (viewState: any, eState?: any) => Promise<void>;
+type SetViewStateFn = (viewState: ViewState, eState?: Record<string, unknown>) => Promise<void>;
 
 /** Internal Leaf properties (not exposed by Obsidian) / Obsidian이 노출하지 않는 Leaf 내부 속성 */
 interface InternalLeaf {
@@ -43,20 +49,46 @@ interface InternalWorkspace {
   rightSplit: WorkspaceSplit;
 }
 
+/** Tree DOM item in file explorer / 파일 탐색기 트리 DOM 항목 */
+interface TreeDomItem {
+  file?: TFile;
+  selfEl?: HTMLElement;
+}
+
 /**
  * File explorer view internal structure / 파일 탐색기 뷰 내부 구조
  * Note: explorerView.activeDom and tree.activeDom are separate objects synced by onFileOpen
  * 참고: explorerView.activeDom과 tree.activeDom은 별개 객체이며 onFileOpen이 동기화함
  */
 interface ExplorerView {
-  activeDom: { file?: TFile; selfEl?: HTMLElement } | null;
+  activeDom: TreeDomItem | null;
   tree?: {
-    activeDom: any;
-    focusedItem: any;
-    setFocusedItem?: (item: any) => void;
+    activeDom: TreeDomItem | null;
+    focusedItem: TreeDomItem | null;
+    setFocusedItem?: (item: TreeDomItem | null) => void;
   };
   containerEl?: HTMLElement;
   onFileOpen?: (file: TFile | null) => void;
+}
+
+/** View with setEphemeralState (internal Obsidian API) */
+interface EphemeralView {
+  setEphemeralState?: (state: Record<string, unknown>) => void;
+}
+
+/** Internal App properties (not in public API) */
+interface InternalApp {
+  internalPlugins?: {
+    getPluginById?: (id: string) => {
+      enabled?: boolean;
+      instance?: {
+        options?: {
+          format?: string;
+          folder?: string;
+        };
+      };
+    } | undefined;
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -101,7 +133,7 @@ const CONFIG = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function log(message: string, ...args: unknown[]) {
-  console.log(`${CONFIG.LOG_PREFIX} ${message}`, ...args);
+  console.debug(`${CONFIG.LOG_PREFIX} ${message}`, ...args);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -156,7 +188,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // Lifecycle / 라이프사이클
   // ─────────────────────────────────────────────────────────────────────────
 
-  async onload() {
+  onload() {
     log("Plugin loaded");
     this.installPatches();
     this.registerEventHandlers();
@@ -239,7 +271,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
    * Determine file open intent: browse (view) or create (new file).
    * 파일 열기 의도 판별: 탐색(조회) 또는 생성(새 파일).
    */
-  private determineOpenIntent(file: TFile, openState?: any): OpenIntent {
+  private determineOpenIntent(file: TFile, openState?: OpenViewState): OpenIntent {
     // rename="all" → newly created file / rename="all" → 새로 생성된 파일
     if (openState?.eState?.rename === "all") {
       return "create";
@@ -318,16 +350,16 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchOpenFile() {
-    const plugin = this;
+    const boundHandler = this.handleOpenFile.bind(this);
 
     const uninstall = around(WorkspaceLeaf.prototype, {
       openFile(original) {
         return async function (
           this: WorkspaceLeaf,
           file: TFile,
-          openState?: any
+          openState?: OpenViewState
         ) {
-          return plugin.handleOpenFile(this, file, openState, original as unknown as OpenFileFn);
+          return boundHandler(this, file, openState, original as unknown as OpenFileFn);
         };
       },
     });
@@ -351,7 +383,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
   private async handleOpenFile(
     leaf: WorkspaceLeaf,
     file: TFile,
-    openState: any,
+    openState: OpenViewState | undefined,
     originalMethod: OpenFileFn
   ) {
     // [1] Newly created files → force title-edit mode (except Daily Notes)
@@ -359,8 +391,8 @@ export default class IDEStylePreviewPlugin extends Plugin {
     if (this.newlyCreatedFiles.has(file.path)) {
       this.newlyCreatedFiles.delete(file.path);
       if (!this.isDailyNote(file)) {
-        openState = openState || {};
-        openState.eState = openState.eState || {};
+        openState = openState ?? {};
+        openState.eState = openState.eState ?? {};
         openState.eState.rename = "all";
       }
     }
@@ -419,7 +451,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
   private async openInNewTab(
     file: TFile,
-    openState: any,
+    openState: OpenViewState | undefined,
     asPermanent: boolean,
     originalMethod: OpenFileFn
   ) {
@@ -447,7 +479,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
   }
 
   private applyRenameMode(leaf: WorkspaceLeaf) {
-    const view = leaf.view as any;
+    const view = leaf.view as unknown as EphemeralView;
     if (view?.setEphemeralState) {
       view.setEphemeralState({ rename: "all" });
     }
@@ -458,12 +490,12 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchSetViewState() {
-    const plugin = this;
+    const boundHandler = this.handleSetViewState.bind(this);
 
     const uninstall = around(WorkspaceLeaf.prototype, {
       setViewState(original) {
-        return async function (this: WorkspaceLeaf, viewState: any, eState?: any) {
-          return plugin.handleSetViewState(this, viewState, eState, original as unknown as SetViewStateFn);
+        return async function (this: WorkspaceLeaf, viewState: ViewState, eState?: Record<string, unknown>) {
+          return boundHandler(this, viewState, eState, original as unknown as SetViewStateFn);
         };
       },
     });
@@ -482,8 +514,8 @@ export default class IDEStylePreviewPlugin extends Plugin {
    */
   private async handleSetViewState(
     leaf: WorkspaceLeaf,
-    viewState: any,
-    eState: any,
+    viewState: ViewState,
+    eState: Record<string, unknown> | undefined,
     originalMethod: SetViewStateFn
   ) {
     if (this.wasProcessed(leaf)) {
@@ -575,14 +607,15 @@ export default class IDEStylePreviewPlugin extends Plugin {
    *   detach 후(비동기): 잔류 DOM 클래스 정리
    */
   private patchDetach() {
-    const plugin = this;
+    const clearState = this.clearSidebarInternalState.bind(this);
+    const cleanDOM = this.cleanStaleSidebarDOM.bind(this);
 
     const uninstall = around(WorkspaceLeaf.prototype, {
       detach(original) {
         return function (this: WorkspaceLeaf) {
-          plugin.clearSidebarInternalState();
+          clearState();
           const result = original.call(this);
-          setTimeout(() => plugin.cleanStaleSidebarDOM(), 0);
+          setTimeout(() => cleanDOM(), 0);
           return result;
         };
       },
@@ -597,13 +630,14 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchSetPinned() {
-    const plugin = this;
+    const { previewLeaves } = this;
+    const promote = this.promoteToPermanent.bind(this);
 
     const uninstall = around(WorkspaceLeaf.prototype, {
       setPinned(original) {
         return function (this: WorkspaceLeaf, pinned: boolean) {
-          if (pinned && plugin.previewLeaves.has(this)) {
-            plugin.promoteToPermanent(this);
+          if (pinned && previewLeaves.has(this)) {
+            promote(this);
           }
           return original.call(this, pinned);
         };
@@ -619,12 +653,12 @@ export default class IDEStylePreviewPlugin extends Plugin {
   // ─────────────────────────────────────────────────────────────────────────
 
   private patchVaultCreate() {
-    const plugin = this;
+    const { newlyCreatedFiles } = this;
     const vault = this.app.vault;
     const originalCreate = vault.create.bind(vault);
 
-    vault.create = async function (path: string, data: string, options?: any) {
-      plugin.newlyCreatedFiles.add(path);
+    vault.create = function (path: string, data: string, options?: DataWriteOptions) {
+      newlyCreatedFiles.add(path);
       return originalCreate(path, data, options);
     };
 
@@ -816,7 +850,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
     // Editor content change → promote / 본문 편집 → 승격
     this.registerEvent(
       this.app.workspace.on("editor-change", (editor, info) => {
-        const leaf = (info as any).leaf as WorkspaceLeaf | undefined;
+        const leaf = (info as unknown as { leaf?: WorkspaceLeaf }).leaf;
         if (leaf && this.previewLeaves.has(leaf)) {
           this.promoteToPermanent(leaf);
         }
@@ -877,8 +911,8 @@ export default class IDEStylePreviewPlugin extends Plugin {
       window.clearTimeout(this.titleRenameTimer);
     }
 
-    this.titleRenameTimer = window.setTimeout(async () => {
-      await this.renameFile(currentPath, newTitle);
+    this.titleRenameTimer = window.setTimeout(() => {
+      void this.renameFile(currentPath, newTitle);
     }, CONFIG.TITLE_RENAME_DEBOUNCE_MS);
   }
 
@@ -1039,7 +1073,7 @@ export default class IDEStylePreviewPlugin extends Plugin {
   private isDailyNote(file: TFile): boolean {
     if (file.extension !== "md") return false;
 
-    const dailyNotes = (this.app as any).internalPlugins?.getPluginById?.("daily-notes");
+    const dailyNotes = (this.app as unknown as InternalApp).internalPlugins?.getPluginById?.("daily-notes");
     if (!dailyNotes?.enabled) return false;
 
     const options = dailyNotes.instance?.options;
@@ -1048,14 +1082,14 @@ export default class IDEStylePreviewPlugin extends Plugin {
 
     if (folder && file.parent?.path !== folder) return false;
 
-    return (window as any).moment(file.basename, format, true).isValid();
+    return moment(file.basename, format, true).isValid();
   }
 
   private findLeafByContentEl(contentEl: HTMLElement): WorkspaceLeaf | null {
     let found: WorkspaceLeaf | null = null;
 
     this.app.workspace.iterateAllLeaves((leaf) => {
-      if ((leaf as any).containerEl?.contains(contentEl)) {
+      if ((leaf as unknown as InternalLeaf).containerEl?.contains(contentEl)) {
         found = leaf;
       }
     });
